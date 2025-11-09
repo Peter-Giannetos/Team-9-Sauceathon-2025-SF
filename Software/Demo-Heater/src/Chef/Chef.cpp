@@ -36,7 +36,7 @@ unsigned long previousMillisSound = 0;
 
 long ledInterval = PERIOD_LED_GOOD;      // 1 second
 long helloInterval = 10000;   // 10 seconds
-const long soundInterval = 20;  // More frequent updates for faster reaction
+const long soundInterval = 10;  // More frequent updates for faster reaction
 
 
 bool ledState = LOW;
@@ -322,30 +322,40 @@ void loop() {
 
     // Faster smoothing for spikes
     static float smoothValue = 0;
-    float alpha = 0.15;
+    float alpha = 0.4;
     smoothValue = smoothValue * (1 - alpha) + soundValue * alpha;
 
     // Envelope detector with dynamic decay based on activity
     static float level = 0;
-    float decayRate = 0.92; // base decay (faster when quiet)
+    static unsigned long lastLoudMillis = 0;
+    const unsigned long holdTime = 300; // milliseconds to maintain high level after loud sound
 
-    if (smoothValue > 1500) {
-      decayRate = 0.97; // slow decay for loud sounds
-    } else if (smoothValue > 800) {
-      decayRate = 0.95; // medium decay
-    } // else keep base decay
+    // Detect loudness threshold
+    int loudThreshold = 1200;
 
-    if (smoothValue > level) {
-      // Fast rise for responsiveness
-      level = smoothValue + (smoothValue - level) * 0.5;
-    } else {
-      // Dynamic decay
-      level *= decayRate;
+    // Update loud timer
+    if (smoothValue > loudThreshold) {
+      lastLoudMillis = millis();
     }
 
-    if (level < 70) level = 70;
+    // If recent loud sound, keep higher level
+    bool holdActive = (millis() - lastLoudMillis) < holdTime;
 
-    float amplified = (level - 500) * 3.2;
+    // Adjust decay behavior
+    float decayRate = holdActive ? 0.992 : 0.96;  
+
+    if (smoothValue > level) {
+      // Fast rise
+      level = smoothValue + (smoothValue - level) * 0.5;
+    } else {
+      // Decay slower if within hold
+      level = level * decayRate + smoothValue * (1 - decayRate);
+    }
+
+
+    if (level < 40) level = 40;
+
+    float amplified = (level - 500) * 4.2;
     int amplifiedValue = constrain(amplified, 0, 4095);
     int step = map(amplifiedValue, 0, 4095, 0, NUMPIXELS - 1);
     step = constrain(step, 0, NUMPIXELS - 1);
