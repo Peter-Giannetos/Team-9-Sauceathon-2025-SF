@@ -354,8 +354,9 @@ void loop() {
 
     // Map sound level to PWM duty cycle (0–255)
     int pwmGain = 3;
-    int pwmValue = map(amplifiedValue * 3.2, 0, 4095, 0, 255);
-    pwmValue = constrain(pwmValue, 0, 255);
+    const int PWM_MAX_60 = 153; // 60% of 255
+    int pwmValue = map(amplifiedValue * pwmGain, 0, 4095, 0, PWM_MAX_60);
+    pwmValue = constrain(pwmValue, 0, PWM_MAX_60);
 
     // Smooth PWM response for stability
     static int smoothPWM = 0;
