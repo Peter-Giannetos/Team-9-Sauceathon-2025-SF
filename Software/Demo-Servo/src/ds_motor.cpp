@@ -8,15 +8,7 @@
 /* Defines */
 #define DEBUG (0U)
 
-/* Private Function Definitions */
-static inline uint8_t dsClosedAngleForPin(uint8_t pin) {
-  return (pin == OUT2_PIN) ? BOTTOM_BUN_CLOSED : TOP_BUN_CLOSED;
-}
-
-static inline uint8_t dsOpenAngleForPin(uint8_t pin) {
-  return (pin == OUT2_PIN) ? BOTTOM_BUN_OPEN : TOP_BUN_OPEN;
-}
-
+/* Private Fnction Definitions */
 static inline uint16_t angleToUs(uint8_t deg) {
   return static_cast<uint16_t>(SERVO_MIN_US + ((static_cast<uint32_t>(deg) * 2000U) / 180U));
 }
@@ -26,6 +18,14 @@ static inline uint16_t angleToUs(uint8_t deg) {
 // -----------------------------
 // DS positional (manual pulse)
 // -----------------------------
+uint8_t dsClosedAngleForPin(uint8_t pin) {
+  return (pin == OUT2_PIN) ? BOTTOM_BUN_CLOSED : TOP_BUN_CLOSED;
+}
+
+uint8_t dsOpenAngleForPin(uint8_t pin) {
+  return (pin == OUT2_PIN) ? BOTTOM_BUN_OPEN : TOP_BUN_OPEN;
+}
+
 void driveDsServoAngle(uint8_t pin, int angleDeg) {
   angleDeg = constrain(angleDeg, 0, 180);
   uint16_t us = angleToUs(static_cast<uint8_t>(angleDeg));

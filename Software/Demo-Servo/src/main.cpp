@@ -15,8 +15,8 @@
 // -----------------------------
 #define DS_MOTOR              (0U)  // Discrete positional (manual pulse)
 #define DS_CONTINUOUS_MOTOR   (0U)  // Continuous (manual pulse)
-#define TOWER_PRO_MOTOR       (0U)  // TowerPro MG995 via Servo lib (positional)
-#define PARALLAX_MOTOR        (1U)  // Continuous (manual pulse)
+#define TOWER_PRO_MOTOR       (1U)  // TowerPro MG995 via Servo lib (positional)
+#define PARALLAX_MOTOR        (0U)  // Continuous (manual pulse)
 
 // -----------------------------
 // Sanity check: exactly one target
@@ -105,7 +105,7 @@ void setup() {
   blinkAtBoot(LED_PIN);
 
 #if TOWER_PRO_MOTOR
-  towerProInit();
+  towerProInit(OUT1_PIN);
 #endif
 
   // side effect: spin up Wifi task (and Print task if DEBUG flag set)
@@ -178,7 +178,37 @@ void loop() {
   enqueuePrint("TP: enter '<angle 0..180>' or 'b <duration_ms> <pause_ms>':\n");
   while (true) {
     // Keep last angle commanded
-    MG995_Servo.write(constrain(num, 0, 180));
+    MG995_servo.write(constrain(num, 0, 180));
+
+    if (Serial.available()) {
+      String input = Serial.readStringUntil('\n'); input.trim();
+      if (input.length() == 0) break;
+
+      String t0, t1, t2; tokenize3(input, t0, t1, t2);
+
+      if (t0.equalsIgnoreCase("b") || t0.equalsIgnoreCase("bounce")) {
+        uint16_t durationMs = 500;
+        uint16_t pauseMs    = 1000;
+        if (t1.length() && isDigit(t1.charAt(0))) durationMs = (uint16_t)MAX(0, (int)(t1.toInt()));
+        if (t2.length() && isDigit(t2.charAt(0))) pauseMs    = (uint16_t)MAX(0, (int)(t2.toInt()));
+        towerProBounce(durationMs, pauseMs);
+      } else if (isDigit(t0.charAt(0))) {
+        num = constrain(t0.toInt(), 0, 180);
+        MG995_servo.write(num);
+      }
+      break;
+    }
+  }
+
+
+#elif SMRAZA_MOTOR
+  // Input formats:
+  // - "<angle 0..180>"
+  // - "b <duration_ms> <pause_ms>"
+  enqueuePrint("TP: enter '<angle 0..180>' or 'b <duration_ms> <pause_ms>':\n");
+  while (true) {
+    // Keep last angle commanded
+    SMRAZA_servo.write(constrain(num, 0, 180));
 
     if (Serial.available()) {
       String input = Serial.readStringUntil('\n'); input.trim();
@@ -191,10 +221,10 @@ void loop() {
         uint16_t pauseMs    = 1000;
         if (t1.length() && isDigit(t1.charAt(0))) durationMs = (uint16_t)x(0, t1.toInt());
         if (t2.length() && isDigit(t2.charAt(0))) pauseMs    = (uint16_t)MAX(0, (int)(t2.toInt()));
-        towerProBounce(durationMs, pauseMs);
+        smrazaS51Bounce(durationMs, pauseMs);
       } else if (isDigit(t0.charAt(0))) {
         num = constrain(t0.toInt(), 0, 180);
-        MG995_Servo.write(num);
+        smrazaS51.write(num);
       }
       break;
     }
