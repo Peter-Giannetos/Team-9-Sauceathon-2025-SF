@@ -1,30 +1,31 @@
 #include <Arduino.h>
 
-#define LED_PIN           (2)
-#define OUT1_PIN          (13)
-#define OUT2_PIN          (14)  // TODO!
-#define DEBUG             (0U)
-#define DS_MOTOR          (1U)
-#define TOWER_PRO_MOTOR   (0U)
-#define PARALLAX_MOTOR    (0U)
+#define LED_PIN           2
+#define OUT1_PIN          13
+#define OUT2_PIN          14
+#define DEBUG             0
+#define DS_MOTOR          1
+#define TOWER_PRO_MOTOR   0
+#define PARALLAX_MOTOR    0
+
 #if DS_MOTOR
-#define POSITIONAL_MOTOR  (DS_MOTOR)
-#define TOP_BUN_CLOSED    (170U)
-#define TOP_BUN_OPEN      (80U)
-#define BOTTOM_BUN_CLOSED    (90U)
-#define BOTTOM_BUN_OPEN      (0U)
-#define CLOSED_STATE      (1U)
-#define OPEN_STATE        (0U)
+#define POSITIONAL_MOTOR  DS_MOTOR
+#define TOP_BUN_CLOSED    170
+#define TOP_BUN_OPEN      80
+#define BOTTOM_BUN_CLOSED 90
+#define BOTTOM_BUN_OPEN   0
+#define CLOSED_STATE      1
+#define OPEN_STATE        0
 #elif TOWER_PRO_MOTOR
-#define POSITIONAL_MOTOR  (TOWER_PRO_MOTOR)
+#define POSITIONAL_MOTOR  TOWER_PRO_MOTOR
 #elif PARALLAX_MOTOR
-#define CONTINUOUS_MOTOR  (PARALLAX_MOTOR)
+#define CONTINUOUS_MOTOR  PARALLAX_MOTOR
 #endif
 
 void init_serial() {
   Serial.begin(9600);
   delay(1000);
-  while(!Serial);
+  while (!Serial);
 }
 
 void wait_for_user() {
@@ -80,13 +81,10 @@ void drive_parallax_servo_counterwise(int pin) {
 
 void drive_parallax_servo_bounce(int pin, int duration) {
   // assume pin is LOW at start of function
-  int i;
-  for (i = 0; i < duration; i++)
-  {
+  for (int i = 0; i < duration; i++) {
     drive_parallax_servo_clockwise(pin);
   }
-  for (i = 0; i < duration; i++)
-  {
+  for (int i = 0; i < duration; i++) {
     drive_parallax_servo_counterwise(pin);
   }
 }
@@ -104,21 +102,19 @@ void drive_tower_pro_servo(int pin, int degrees) {
 
 #if DS_MOTOR
 void drive_ds_servo(int pin, int degrees) {
-  int target_us;
-
-  if ( degrees < 0 || degrees > 180 )
-  {
-    // fail
+  if (degrees < 0 || degrees > 180) {
     return;
   }
+
   // 0 degrees --> 500 us
   // 90 degrees --> 1500 us
   // 180 degrees --> 2500 us
-  target_us = ((degrees * 2000) / 180) + 500;
-  if (DEBUG)
+  int target_us = ((degrees * 2000) / 180) + 500;
+
+  if (DEBUG) {
     Serial.printf("DEBUG: degrees = %d\n", degrees);
-  if (DEBUG)
     Serial.printf("DEBUG: target_us = %d\n", target_us);
+  }
 
   delay(20);
   digitalWrite(pin, HIGH);
@@ -127,17 +123,13 @@ void drive_ds_servo(int pin, int degrees) {
 }
 
 void drive_ds_servo_top_bun(bool open) {
-  int pin = OUT1_PIN;
-  int degrees = (open) ? (TOP_BUN_OPEN) : (TOP_BUN_CLOSED);
-
-  drive_ds_servo(pin, degrees);
+  int degrees = open ? TOP_BUN_OPEN : TOP_BUN_CLOSED;
+  drive_ds_servo(OUT1_PIN, degrees);
 }
 
 void drive_ds_servo_bottom_bun(bool open) {
-  int pin = OUT2_PIN;
-  int degrees = (open) ? (BOTTOM_BUN_OPEN) : (BOTTOM_BUN_CLOSED);
-
-  drive_ds_servo(pin, degrees);
+  int degrees = open ? BOTTOM_BUN_OPEN : BOTTOM_BUN_CLOSED;
+  drive_ds_servo(OUT2_PIN, degrees);
 }
 #endif // DS_MOTOR
 
@@ -167,16 +159,12 @@ void loop() {
 #if POSITIONAL_MOTOR
   Serial.println("Please enter value from 0 to 180...: ");
 
-  while(true)
-  {
+  while (true) {
     // continuously drive motor to position
 #if DS_MOTOR
-    if (stateful_flag)
-    {
+    if (stateful_flag) {
       drive_ds_servo(OUT1_PIN, num);
-    }
-    else
-    {
+    } else {
       drive_ds_servo_top_bun(open_flag);
       drive_ds_servo_bottom_bun(open_flag);
     }
@@ -185,20 +173,16 @@ void loop() {
 #endif
 
     // update position
-    if (Serial.available())
-    {
+    if (Serial.available()) {
       input = Serial.readStringUntil('\n');
       input.trim();
 
       // Test string or integer input
-      if ( input.charAt(0) >= 'a' && input.charAt(0) <= 'z' )
-      {
+      if (input.charAt(0) >= 'a' && input.charAt(0) <= 'z') {
         stateful_flag = true;
-        open_flag = (strcmp(input.c_str(), "open") > 0);
-        Serial.printf("DEBUG: open_flag=%d", open_flag);
-      }
-      else
-      {
+        open_flag = (strcmp(input.c_str(), "open") == 0);
+        Serial.printf("DEBUG: open_flag=%d\n", open_flag);
+      } else {
         stateful_flag = false;
         num = input.toInt();
         Serial.printf("Driving motor to %d degrees...\n", num);
@@ -208,44 +192,32 @@ void loop() {
     }
   }
 
-
 #elif CONTINUOUS_MOTOR
 
-  // drive_parallax_servo_halt(OUT1_PIN);
   Serial.println("Please enter value 'r', 'l', or 's' for right, left, stop...: ");
   Serial.println("Or, please enter number for BOUNCE");
 
-  while(true)
-  {
+  while (true) {
     // continuously drive motor to position
-    if (dir < 0)
-    {
+    if (dir < 0) {
       drive_parallax_servo_counterwise(OUT1_PIN);
-    }
-    else if (dir > 0)
-    {
+    } else if (dir > 0) {
       drive_parallax_servo_clockwise(OUT1_PIN);
-    }
-    else if (bounce_flag)
-    {
+    } else if (bounce_flag) {
       // side effect: set dir = 0 when done
       drive_parallax_servo_bounce(OUT1_PIN, num);
       dir = 0;
       bounce_flag = false;
-    }
-    else
-    {
+    } else {
       drive_parallax_servo_halt(OUT1_PIN);
     }
 
     // update position
-    if (Serial.available())
-    {
+    if (Serial.available()) {
       input = Serial.readStringUntil('\n');
       input.trim();
       char mode = input.charAt(0);
-      switch (mode)
-      {
+      switch (mode) {
         case 'r':
           Serial.println("Drive motor to RIGHT");
           dir = 1;
@@ -260,9 +232,9 @@ void loop() {
           Serial.println("Drive motor to HALT");
           dir = 0;
           bounce_flag = false;
+          break;
         default:
-          if ( mode > '0' && mode <= '9' )
-          {
+          if (mode >= '0' && mode <= '9') {
             bounce_flag = true;
             num = input.toInt();
             Serial.printf("Bounce motor by %d cycles\n", num);
