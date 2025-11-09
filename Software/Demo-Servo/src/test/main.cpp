@@ -15,8 +15,8 @@
 // -----------------------------
 #define DS_MOTOR              (0U)  // Discrete positional (manual pulse)
 #define DS_CONTINUOUS_MOTOR   (0U)  // Continuous (manual pulse)
-#define TOWER_PRO_MOTOR       (1U)  // TowerPro MG995 via Servo lib (positional)
-#define PARALLAX_MOTOR        (0U)  // Continuous (manual pulse)
+#define TOWER_PRO_MOTOR       (0U)  // TowerPro MG995 via Servo lib (positional)
+#define PARALLAX_MOTOR        (1U)  // Continuous (manual pulse)
 
 // -----------------------------
 // Sanity check: exactly one target
@@ -39,6 +39,8 @@
 #endif
 #if TOWER_PRO_MOTOR
 #include "tower_pro_motor.h"
+TowerProMotor motor1;
+TowerProMotor motor2;
 #endif
 
 // -----------------------------
@@ -56,17 +58,17 @@ static void initSerial() {
 }
 
 static void waitForUser() {
-  enqueuePrint("Type 'y' then press Enter to start:\n");
+  Serial.printf("Type 'y' then press Enter to start:\n");
   String input;
   while (true) {
     if (Serial.available()) {
       input = Serial.readStringUntil('\n');
       input.trim();
       if (input.equalsIgnoreCase("y")) {
-        enqueuePrint("Starting main loop...\n");
+        Serial.printf("Starting main loop...\n");
         return;
       } else {
-        enqueuePrint("Waiting for 'y'...\n");
+        Serial.printf("Waiting for 'y'...\n");
       }
     }
   }
@@ -105,7 +107,8 @@ void setup() {
   blinkAtBoot(LED_PIN);
 
 #if TOWER_PRO_MOTOR
-  towerProInit(OUT1_PIN);
+  motor1.attach(OUT1_PIN);
+  motor2.attach(OUT2_PIN);
 #endif
 
   // side effect: spin up Wifi task (and Print task if DEBUG flag set)
@@ -128,7 +131,7 @@ void loop() {
   // - "close [1|2]"
   // - "b <pause_ms> [1|2]"
   // - "<angle 0..180> [1|2]"
-  enqueuePrint("DS: enter 'open [1|2]', 'close [1|2]', 'b <pause_ms> [1|2]', or '<angle> [1|2]':\n");
+  Serial.printf("DS: enter 'open [1|2]', 'close [1|2]', 'b <pause_ms> [1|2]', or '<angle> [1|2]':\n");
   while (true) {
     // Refresh last commanded angle for active pin if the last cmd was numeric
     driveDsServoAngle(dsActivePin, num);
@@ -175,10 +178,13 @@ void loop() {
   // Input formats:
   // - "<angle 0..180>"
   // - "b <duration_ms> <pause_ms>"
-  enqueuePrint("TP: enter '<angle 0..180>' or 'b <duration_ms> <pause_ms>':\n");
+  Serial.printf("TP: enter '<angle 0..180>' or 'b <duration_ms> <pause_ms>':\n");
   while (true) {
     // Keep last angle commanded
-    MG995_servo.write(constrain(num, 0, 180));
+    disableWifi();
+    motor1.servo.write(constrain(num, 0, 180));
+    delay(10);
+    enableWifi();
 
     if (Serial.available()) {
       String input = Serial.readStringUntil('\n'); input.trim();
@@ -191,10 +197,16 @@ void loop() {
         uint16_t pauseMs    = 1000;
         if (t1.length() && isDigit(t1.charAt(0))) durationMs = (uint16_t)MAX(0, (int)(t1.toInt()));
         if (t2.length() && isDigit(t2.charAt(0))) pauseMs    = (uint16_t)MAX(0, (int)(t2.toInt()));
-        towerProBounce(durationMs, pauseMs);
+        disableWifi();
+        motor1.bounce(durationMs, pauseMs);
+        delay(10);
+        enableWifi();
       } else if (isDigit(t0.charAt(0))) {
         num = constrain(t0.toInt(), 0, 180);
-        MG995_servo.write(num);
+        disableWifi();
+        motor1.servo.write(num);
+        delay(10);
+        enableWifi();
       }
       break;
     }
@@ -205,7 +217,7 @@ void loop() {
   // Input formats:
   // - "<angle 0..180>"
   // - "b <duration_ms> <pause_ms>"
-  enqueuePrint("TP: enter '<angle 0..180>' or 'b <duration_ms> <pause_ms>':\n");
+  Serial.printf("TP: enter '<angle 0..180>' or 'b <duration_ms> <pause_ms>':\n");
   while (true) {
     // Keep last angle commanded
     SMRAZA_servo.write(constrain(num, 0, 180));
@@ -231,7 +243,7 @@ void loop() {
   }
 
 #elif DS_CONTINUOUS_MOTOR
-  enqueuePrint("CR: enter 'r' (right), 'l' (left), 's' (stop), or a number for bounce cycles:\n");
+  Serial.printf("CR: enter 'r' (right), 'l' (left), 's' (stop), or a number for bounce cycles:\n");
   while (true) {
     if (dir < 0)      contServoLeft(OUT1_PIN);
     else if (dir > 0) contServoRight(OUT1_PIN);
@@ -246,9 +258,9 @@ void loop() {
 
       char mode = input.charAt(0);
       switch (mode) {
-        case 'r': enqueuePrint("Right\n"); dir = 1;  bounceFlag = false; break;
-        case 'l': enqueuePrint("Left\n");  dir = -1; bounceFlag = false; break;
-        case 's': enqueuePrint("Stop\n");  dir = 0;  bounceFlag = false; break;
+        case 'r': Serial.printf("Right\n"); dir = 1;  bounceFlag = false; break;
+        case 'l': Serial.printf("Left\n");  dir = -1; bounceFlag = false; break;
+        case 's': Serial.printf("Stop\n");  dir = 0;  bounceFlag = false; break;
         default:
           if (isDigit(mode)) { num = MAX(0, (int)(input.toInt())); bounceFlag = true; }
           break;
@@ -259,7 +271,7 @@ void loop() {
 #endif // DS_MOTOR
 
 #if PARALLAX_MOTOR
-  enqueuePrint("CR: enter 'r' (right), 'l' (left), 's' (stop), or a number for bounce cycles:\n");
+  Serial.printf("CR: enter 'r' (right), 'l' (left), 's' (stop), or a number for bounce cycles:\n");
   while (true) {
     if (dir < 0)      parallaxServoLeft(OUT1_PIN);
     else if (dir > 0) parallaxServoRight(OUT1_PIN);
@@ -274,9 +286,9 @@ void loop() {
 
       char mode = input.charAt(0);
       switch (mode) {
-        case 'r': enqueuePrint("Right\n"); dir = 1;  bounceFlag = false; break;
-        case 'l': enqueuePrint("Left\n");  dir = -1; bounceFlag = false; break;
-        case 's': enqueuePrint("Stop\n");  dir = 0;  bounceFlag = false; break;
+        case 'r': Serial.printf("Right\n"); dir = 1;  bounceFlag = false; break;
+        case 'l': Serial.printf("Left\n");  dir = -1; bounceFlag = false; break;
+        case 's': Serial.printf("Stop\n");  dir = 0;  bounceFlag = false; break;
         default:
           if (isDigit(mode)) { num = MAX(0, (int)(input.toInt())); bounceFlag = true; }
           break;

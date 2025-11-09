@@ -35,28 +35,44 @@ TaskHandle_t TaskPrintHandle = NULL;
 
 /* Private Function Definitions */
 
+#include "slave_config.h"
+
+// Shared last known state initialized to UNKNOWN
+volatile state lastKnownState = STATE_UNKNOWN;
 
 // Callback when data is received
 void OnDataRecv(const uint8_t* mac, const uint8_t* incomingDataPtr, int len) {
+  
+  // 1. Fetch message
   memcpy(&incomingData, incomingDataPtr, sizeof(incomingData));
+  enqueuePrint("Received data: %s\n", incomingData.msg);
 
+  // 2. Fetch device MAC
   char macStr[18];
-  snprintf(macStr, sizeof(macStr),
-           "%02X:%02X:%02X:%02X:%02X:%02X",
-           mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X", 
+        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    // enqueuePrint("Received from MAC: %s\n", macStr);
+    memcpy(&incomingData, incomingDataPtr, sizeof(incomingData));
+    // enqueuePrint("Received data: %s\n", incomingData.msg);
 
-  // Print received message
-  enqueuePrint("Received from %s: %s, value: %d", macStr, incomingData.msg, incomingData.value);
-
-  // Prepare acknowledgment
-  strcpy(outgoingData.msg, "Ack from Slave");
-  outgoingData.value = millis() / 1000;
-
-  esp_err_t result = esp_now_send(masterMAC, (uint8_t*)&outgoingData, sizeof(outgoingData));
-  if (result == ESP_OK) {
-    enqueuePrint("Ack sent back to master");
-  } else {
-    enqueuePrint("Failed to send ack");
+  // 3. Process message
+  if (strcmp(incomingData.msg, "FSM STATE 1") == 0) {
+    lastKnownState = STATE_B_DROP;
+  }
+  else if ((strcmp(incomingData.msg, "FSM STATE 2") == 0)) {
+    lastKnownState = STATE_B_BUTTER;
+  }
+  else if ((strcmp(incomingData.msg, "FSM STATE 6") == 0)) {
+    // Toast gate control at butter step
+    lastKnownState = STATE_T_DROP;
+  }
+  else if ((strcmp(incomingData.msg, "FSM STATE 7") == 0)) {
+    // Toast gate control at butter step
+    lastKnownState = STATE_T_BUTTER;
+  }
+  else 
+  {
+    lastKnownState = STATE_UNKNOWN;
   }
 }
 
@@ -167,4 +183,34 @@ void startSlave() {
   }
 
   enqueuePrint("Slave ready. Waiting for data...");
+}
+
+void disableWifi() {
+  // TODO:
+  esp_now_deinit();  // Deinitialize ESP-NOW
+  WiFi.disconnect(true);  // Disconnect and stop WiFi interface
+  WiFi.mode(WIFI_OFF);
+  enqueuePrint("WiFi disabled\n");
+}
+
+void enableWifi() {
+  // TODO:
+  WiFi.mode(WIFI_STA);
+    if (esp_now_init() != ESP_OK) {
+        enqueuePrint("Error initializing ESP-NOW");
+        return;
+    }
+    esp_now_register_recv_cb(OnDataRecv);
+    // Re-add master peer to resume communication
+    esp_now_peer_info_t peerInfo = {};
+    memcpy(peerInfo.peer_addr, masterMAC, 6);
+    peerInfo.channel = 0;
+    peerInfo.encrypt = false;
+    
+    if (!esp_now_is_peer_exist(masterMAC)) {
+        if (esp_now_add_peer(&peerInfo) != ESP_OK) {
+            enqueuePrint("Failed to add master peer");
+        }
+    }
+    enqueuePrint("WiFi enabled\n");
 }

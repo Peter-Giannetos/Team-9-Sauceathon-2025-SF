@@ -6,6 +6,6 @@
 void parallaxServoHalt(uint8_t pin);
 void parallaxServoRight(uint8_t pin);
 void parallaxServoLeft(uint8_t pin);
-void parallaxServoBounce(uint8_t pin, int cycles);
+void parallaxServoBounce(uint8_t pin, int cycles, int pause);
 
 #endif // PARALLAX_MOTOR_H

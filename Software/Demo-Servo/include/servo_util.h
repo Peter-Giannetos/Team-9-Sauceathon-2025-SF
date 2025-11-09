@@ -18,9 +18,9 @@ constexpr uint8_t OUT2_PIN = 14;   // Secondary (DS dual-servo use)
 // Servo timing constants
 // -----------------------------
 constexpr uint16_t SERVO_FRAME_MS   = 20;    // Typical RC servo frame
-constexpr uint16_t SERVO_NEUTRAL_US = 1500;  // Neutral for continuous
-constexpr uint16_t SERVO_MIN_US     = 500;   // Positional min pulse
-constexpr uint16_t SERVO_MAX_US     = 2500;  // Positional max pulse
+// constexpr uint16_t SERVO_NEUTRAL_US = 1500;  // Neutral for continuous
+// constexpr uint16_t SERVO_MIN_US     = 500;   // Positional min pulse
+// constexpr uint16_t SERVO_MAX_US     = 2500;  // Positional max pulse
 
 /* Public Function Definitions */
 void servoOneFrameWriteUs(uint8_t pin, uint16_t highUs);
