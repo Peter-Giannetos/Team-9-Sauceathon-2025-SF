@@ -1,12 +1,17 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <esp_now.h>
+#include <Adafruit_NeoPixel.h>
+
 
 //===================================================================================================
 // Pin Definitions
 
-#define LED_PIN (2)
-#define PWM_PIN (12)
+#define LED_PIN         (2)
+#define PWM_PIN         (12)
+#define NEOPIXEL_PIN    (14)
+#define NUMPIXELS       (16)
+#define SOUND_PIN       (34)
 
 #define PERIOD_LED_ERROR  (200)
 #define PERIOD_LED_GOOD   (1000)
@@ -27,10 +32,17 @@ bool ready = false;
 
 unsigned long previousMillisLED = 0;
 unsigned long previousMillisHello = 0;
+unsigned long previousMillisSound = 0;
+
 long ledInterval = PERIOD_LED_GOOD;      // 1 second
 long helloInterval = 10000;   // 10 seconds
+const long soundInterval = 20;  // More frequent updates for faster reaction
+
 
 bool ledState = LOW;
+bool audioMode = false;  // Default: Manual-based PWM updates
+
+Adafruit_NeoPixel strip(NUMPIXELS, NEOPIXEL_PIN, NEO_GRB + NEO_KHZ800);
 
 // PWM configuration
 int pwmDutyCycle = PWM_DEFAULT_DUTY;
@@ -69,6 +81,51 @@ QueueHandle_t printQueue;
 // Function Definitions
 
 
+// FUNCTION: Color Interpolate
+uint32_t interpolateColor(uint8_t r1, uint8_t g1, uint8_t b1,
+                          uint8_t r2, uint8_t g2, uint8_t b2,
+                          float t) {
+  uint8_t r = r1 + (r2 - r1) * t;
+  uint8_t g = g1 + (g2 - g1) * t;
+  uint8_t b = b1 + (b2 - b1) * t;
+  return strip.Color(r, g, b);
+}
+
+// FUNCTION: Brightness & Color Gradient
+void displayEnhancedBrightnessGradient(int step) {
+  float progress = (float)step / (NUMPIXELS - 1);
+  float globalBrightness = pow(progress, 2.2) * 0.9 + 0.1;
+
+  for (int i = 0; i < NUMPIXELS; i++) {
+    float ratio = (float)i / (NUMPIXELS - 1);
+    uint32_t color;
+
+    if (ratio < 0.15) {
+      float t = ratio / 0.15;
+      color = interpolateColor(0, 255, 0, 255, 255, 0, t);
+    } else if (ratio < 0.35) {
+      float t = (ratio - 0.15) / 0.20;
+      color = interpolateColor(255, 255, 0, 255, 120, 0, t);
+    } else {
+      float t = (ratio - 0.35) / 0.65;
+      color = interpolateColor(255, 120, 0, 255, 0, 0, t);
+    }
+
+    uint8_t r = ((color >> 16) & 0xFF) * globalBrightness;
+    uint8_t g = ((color >> 8) & 0xFF) * globalBrightness;
+    uint8_t b = (color & 0xFF) * globalBrightness;
+
+    if (i <= step)
+      strip.setPixelColor(i, r, g, b);
+    else
+      strip.setPixelColor(i, 0, 0, 0);
+  }
+
+  strip.show();
+}
+
+
+
 // FUNCTION: Sends strings to global queue
 void enqueuePrint(const char* fmt, ...) {
   char tempBuf[PRINT_BUFFER_SIZE];
@@ -100,9 +157,9 @@ void OnDataRecv(const uint8_t* mac, const uint8_t* incomingDataPtr, int len) {
   char macStr[18];
     snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X", 
         mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-    enqueuePrint("Received from MAC: %s\n", macStr);
+    // enqueuePrint("Received from MAC: %s\n", macStr);
     memcpy(&incomingData, incomingDataPtr, sizeof(incomingData));
-    enqueuePrint("Received data: %s\n", incomingData.msg);
+    // enqueuePrint("Received data: %s\n", incomingData.msg);
 
   // 3. Process message
   if (strcmp(incomingData.msg, "CHANGE_ME") == 0) {
@@ -118,8 +175,8 @@ void OnDataRecv(const uint8_t* mac, const uint8_t* incomingDataPtr, int len) {
 
 // FUNCTION: ESP-NOW Send Message
 void OnDataSent(const uint8_t* mac_addr, esp_now_send_status_t status) {
-  enqueuePrint("Last Packet Send Status: %s\n",
-               status == ESP_NOW_SEND_SUCCESS ? "Success" : "Fail");
+  // enqueuePrint("Last Packet Send Status: %s\n",
+  //              status == ESP_NOW_SEND_SUCCESS ? "Success" : "Fail");
 }
 
 // FUNCTION: ESP-NOW WiFi task
@@ -172,6 +229,7 @@ void setup() {
 
   // 1. Init LED pin
   pinMode(LED_PIN, OUTPUT);
+  pinMode(SOUND_PIN, INPUT);
 
   // 2. Pin setup PWM
   ledcSetup(PWM_DEFAULT_CHANNEL, PWM_DEFAULT_FREQ, PWM_DEFAULT_RESOLUTION);
@@ -227,8 +285,12 @@ void setup() {
     &TaskWiFiHandle,
     1
   );
-
   enqueuePrint("MAC Address: %s\n", WiFi.macAddress().c_str());
+
+  // 8. Start Neopixels
+  strip.begin();
+  strip.show();
+
 }
 
 //===================================================================================================
@@ -252,33 +314,95 @@ void loop() {
     enqueuePrint("Hello! Time since boot: %lu ms\n", currentMillis);
   }
 
-  // 4. Parse serial input
+  // 4. Update Lights via Sound
+  if (currentMillis - previousMillisSound >= soundInterval) {
+    previousMillisSound = currentMillis;
+
+    int soundValue = analogRead(SOUND_PIN);
+
+    // Faster smoothing for spikes
+    static float smoothValue = 0;
+    float alpha = 0.15;
+    smoothValue = smoothValue * (1 - alpha) + soundValue * alpha;
+
+    // Envelope detector with dynamic decay based on activity
+    static float level = 0;
+    float decayRate = 0.92; // base decay (faster when quiet)
+
+    if (smoothValue > 1500) {
+      decayRate = 0.97; // slow decay for loud sounds
+    } else if (smoothValue > 800) {
+      decayRate = 0.95; // medium decay
+    } // else keep base decay
+
+    if (smoothValue > level) {
+      // Fast rise for responsiveness
+      level = smoothValue + (smoothValue - level) * 0.5;
+    } else {
+      // Dynamic decay
+      level *= decayRate;
+    }
+
+    if (level < 70) level = 70;
+
+    float amplified = (level - 500) * 3.2;
+    int amplifiedValue = constrain(amplified, 0, 4095);
+    int step = map(amplifiedValue, 0, 4095, 0, NUMPIXELS - 1);
+    step = constrain(step, 0, NUMPIXELS - 1);
+
+    displayEnhancedBrightnessGradient(step);
+
+    // Map sound level to PWM duty cycle (0–255)
+    int pwmGain = 3;
+    int pwmValue = map(amplifiedValue * 3.2, 0, 4095, 0, 255);
+    pwmValue = constrain(pwmValue, 0, 255);
+
+    // Smooth PWM response for stability
+    static int smoothPWM = 0;
+    float pwmAlpha = 0.1; // lower values make it smoother
+    smoothPWM = smoothPWM * (1 - pwmAlpha) + pwmValue * pwmAlpha;
+
+    // Write PWM signal based on sound intensity
+    if(audioMode)
+    {
+      ledcWrite(PWM_DEFAULT_CHANNEL, (int)smoothPWM);
+    }
+  }
+
+  // 5. Parse serial input
   if (Serial.available()) {
     
     // 4.1 Read serial
     String cmd = Serial.readStringUntil('\n');
     cmd.trim();
 
-    // 4.2 Decode PWM
-    if (cmd.toInt() >= 0 && cmd.toInt() <= 100) {
+    // 4.2 Decode PWM Mode
+    if (cmd.equalsIgnoreCase("A")) {
+      audioMode = true;
+      enqueuePrint("Switched to AUDIO mode (PWM follows sound input).\n");
+    } else if (cmd.equalsIgnoreCase("M")) {
+      audioMode = false;
+      enqueuePrint("Switched to MANUAL mode (PWM set via serial).\n");
+    } else if (!audioMode && cmd.toInt() >= 0 && cmd.toInt() <= 100) {
       int userValue = cmd.toInt();
       pwmDutyCycle = map(userValue, 0, 100, 0, 255);
       ledcWrite(PWM_DEFAULT_CHANNEL, pwmDutyCycle);
-      enqueuePrint("PWM duty cycle set to %d%%\n", userValue);
+      enqueuePrint("Manual PWM set to %d%%\n", userValue);
     }
+
     
-    // 4.3 Update ESP-NOW message if not a PWM number //TODO COPY THIS FORMAT TO SEND MESSAGES
+    // 4.4 Update ESP-NOW message if not a PWM number //TODO COPY THIS FORMAT TO SEND MESSAGES
     else if (cmd.length() < sizeof(outgoingMsg)) {
       cmd.toCharArray(outgoingMsg, sizeof(outgoingMsg));
       enqueuePrint("Updated message to send: %s\n", outgoingMsg);
     }
     
-    // 4.4 Unknown command error
+    // 4.5 Unknown command error
     else {
       enqueuePrint("Unknown command or message too long. Use PWM (0–100) or shorter text message.\n");
     }
   }
 
-  // 5. Yield to other tasks
+  // 6. Yield to other tasks
   vTaskDelay(20 / portTICK_PERIOD_MS);
 }
