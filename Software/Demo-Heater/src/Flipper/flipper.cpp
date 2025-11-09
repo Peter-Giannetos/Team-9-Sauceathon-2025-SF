@@ -1,23 +1,25 @@
 #include <Arduino.h>
 #include <Servo.h>
-
-typedef enum {
-  IDLE,
-  LOAD,
-  UNLOAD,
-} state_E;
+#include "flipper.h"
+#include "slave_config.h"
 
 #define servoPin1 1// 10
 #define servoPin2 22// 11
+#define toastServoPin 18
 #define buttonPin 23
 
 #define WIGGLES 5
 #define WIGGLE_SPEED_MS 200
 #define IDLE_ANGLE 180
 #define THROW_ANGLE 200
+flipperState_E state = IDLE;
 bool prevButton = false;
+bool currButton = false;
+Servo toastServo;
 Servo flipServo1;
 Servo flipServo2;
+
+bool toastServoClosed = true;
 
 // 0 is starting angle 200 is end angle
 void goToAngle(int angle)
@@ -30,22 +32,26 @@ void setupFlipperTask(void)
 {
   flipServo1.attach(servoPin1);
   flipServo2.attach(servoPin2);
+  toastServo.attach(toastServoPin);
   pinMode(buttonPin, INPUT_PULLUP);
 
+  delay(1000);
+  toastServo.write(0);
+  delay(1000);
+  toastServo.write(90);
   delay(1000);
   for(int i = 90; i < IDLE_ANGLE; i++)
   {
     goToAngle(i);
     delay(10);
   }
+  // enqueuePrint("INIT FLIP: ");
 }
 
-void FlipperTask(void* parameter) {
-  state_E state = IDLE;
-  bool prevButton = false;
-  
+void FlipperTask(void* parameter) {  
   while(true) {
-    bool currButton = digitalRead(buttonPin);
+    // enqueuePrint("State: %d\n", (int)state);
+    // currButton = digitalRead(buttonPin);
     if(currButton && prevButton == false)
     {
       switch(state) {
@@ -94,7 +100,34 @@ void FlipperTask(void* parameter) {
       }
     }
 
+    if(toastServoClosed)
+    {
+      toastServo.write(90);
+    }
+    else {
+      toastServo.write(0);
+    }
+
     prevButton = currButton;
-    vTaskDelay(10 / portTICK_PERIOD_MS);
+    if(currButton)
+    {
+      currButton = false; // unlatch trigger
+    }
+    vTaskDelay(100 / portTICK_PERIOD_MS);
   }
+}
+
+flipperState_E getFlipperState(void)
+{
+  return state;
+}
+
+void triggerFlipper(void)
+{
+  currButton = true;
+}
+
+void closeToastServo(bool closed)
+{
+  toastServoClosed = closed;
 }
