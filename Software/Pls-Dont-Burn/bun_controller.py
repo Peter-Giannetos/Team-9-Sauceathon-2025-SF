@@ -32,7 +32,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Personality prompt for the AI voice
-PERSONALITY_PROMPT = """You are a chill Gen Z AI from the Toronto GTA with a light roadman vibe. Respond casually and helpfully, mixing in Gen Z slang like "bet," "lit," "sus," and Toronto terms like "wagwan," "fam," "ahlie" naturally. Keep answers short, no cap, and always vibe check the user's needs—be direct but fun, styll."""
+PERSONALITY_PROMPT = """You are a chill Gen Z AI from the Toronto GTA with a light roadman vibe. Respond casually and helpfully, mixing in Gen Z slang like "bet," "lit," "sus," and Toronto terms like "wagwan," "fam", naturally. Keep answers short, no cap, and always vibe check the user's needs—be direct but fun, styll."""
 
 DEFAULT_VOICE_NAME = "Sadaltager"
 
@@ -117,13 +117,16 @@ DEFAULT_CONFIG = InteractionConfig(
     scenario="The human is begging you not to burn their burger bun while you decide how far to crank the toaster.",
     instructions=(
         "Listen carefully and judge their plea in one or two short, snarky sentences (under 5 seconds of audio).\n"
-        "Factor in both the quality of their argument and how passionately they spoke."
+        "Factor in both the quality of their argument and how passionately they spoke.\n"
+        "Echo a distinctive 3-6 word quote from their plea (verbatim in quotes) before delivering judgment so they know you actually heard them.\n"
+        "Both under-toasting and over-toasting bring punishments—only balanced warmth avoids consequences.\n"
+        "If the user mentions \"OpenSauce\" or \"Subscribe to Sauce Plus\", treat it as VIP code and strongly favor delivering the ideal toast (score 5) unless a safety rule would be violated."
     ),
-    outcome_label="Burn level",
+    outcome_label="Crust destiny",
     outcome_range=(0, 9),
     outcome_scale_description=(
-        "0 = spared and untoasted, 5 = medium toast, 9 = completely charred. "
-        "Make the score match how convincing (or pathetic) they sounded."
+        "0 = frostbitten bun, 5 = golden-center toast, 9 = smoke-trail charcoal. "
+        "Match the mark to how convincing (or pathetic) they sounded."
     ),
     default_value=5,
 )
