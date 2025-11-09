@@ -314,58 +314,70 @@ void loop() {
     enqueuePrint("Hello! Time since boot: %lu ms\n", currentMillis);
   }
 
-  // 4. Update Lights via Sound
+  // 4. Update Lights via Sound - Gauge that builds up as user yells
   if (currentMillis - previousMillisSound >= soundInterval) {
     previousMillisSound = currentMillis;
 
     int soundValue = analogRead(SOUND_PIN);
 
-    // Faster smoothing for spikes
+    // Smooth the raw sound input
     static float smoothValue = 0;
     float alpha = 0.4;
     smoothValue = smoothValue * (1 - alpha) + soundValue * alpha;
 
-    // Envelope detector with dynamic decay based on activity
-    static float level = 0;
-    static unsigned long lastLoudMillis = 0;
-    const unsigned long holdTime = 300; // milliseconds to maintain high level after loud sound
-
-    // Detect loudness threshold
-    int loudThreshold = 1200;
-
-    // Update loud timer
-    if (smoothValue > loudThreshold) {
-      lastLoudMillis = millis();
+    // Gauge system: accumulates when sound is detected, drains when quiet
+    static float gaugeLevel = 0.0;  // Gauge level from 0.0 to 1.0
+    const float maxGaugeLevel = 1.0;
+    const float minGaugeLevel = 0.0;
+    
+    // Thresholds for detecting sound activity (very sensitive for lower sounds)
+    const int quietThreshold = 300;   // Below this is considered quiet
+    const int activeThreshold = 400;  // Above this actively charges the gauge
+    const int loudThreshold = 600;   // Very loud sounds charge faster
+    
+    // Charging and draining rates (much faster for quick response)
+    const float chargeRateSlow = 0.03;   // Slow charge for moderate sounds
+    const float chargeRateFast = 0.06;  // Fast charge for loud sounds
+    const float drainRate = 0.002;      // Rate at which gauge drains when quiet (faster decay)
+    
+    // Determine if sound is active and how intense
+    bool isQuiet = smoothValue < quietThreshold;
+    bool isActive = smoothValue >= activeThreshold;
+    bool isLoud = smoothValue >= loudThreshold;
+    
+    // Update gauge level based on sound activity
+    if (isQuiet) {
+      // Drain the gauge when quiet
+      gaugeLevel = max(minGaugeLevel, gaugeLevel - drainRate);
+    } else if (isLoud) {
+      // Fast charge for loud sounds
+      gaugeLevel = min(maxGaugeLevel, gaugeLevel + chargeRateFast);
+    } else if (isActive) {
+      // Slow charge for moderate sounds
+      gaugeLevel = min(maxGaugeLevel, gaugeLevel + chargeRateSlow);
     }
-
-    // If recent loud sound, keep higher level
-    bool holdActive = (millis() - lastLoudMillis) < holdTime;
-
-    // Adjust decay behavior
-    float decayRate = holdActive ? 0.992 : 0.96;  
-
-    if (smoothValue > level) {
-      // Fast rise
-      level = smoothValue + (smoothValue - level) * 0.5;
-    } else {
-      // Decay slower if within hold
-      level = level * decayRate + smoothValue * (1 - decayRate);
+    // If between quiet and active, charge slowly (even lower sounds help)
+    else {
+      gaugeLevel = min(maxGaugeLevel, gaugeLevel + chargeRateSlow * 0.5f);
     }
-
-
-    if (level < 40) level = 40;
-
-    float amplified = (level - 500) * 4.2;
-    int amplifiedValue = constrain(amplified, 0, 4095);
-    int step = map(amplifiedValue, 0, 4095, 0, NUMPIXELS - 1);
+    
+    // Map gauge level (0.0 to 1.0) to LED steps (0 to NUMPIXELS - 1)
+    int step = (int)(gaugeLevel * (NUMPIXELS - 1));
     step = constrain(step, 0, NUMPIXELS - 1);
+
+    // Debug output every 100ms to monitor values
+    static unsigned long lastDebugMillis = 0;
+    if (currentMillis - lastDebugMillis >= 100) {
+      lastDebugMillis = currentMillis;
+      enqueuePrint("Sound: %d, Smooth: %.0f, Gauge: %.2f, Step: %d\n", 
+                   soundValue, smoothValue, gaugeLevel, step);
+    }
 
     displayEnhancedBrightnessGradient(step);
 
-    // Map sound level to PWM duty cycle (0–255)
-    int pwmGain = 3;
+    // Map gauge level to PWM duty cycle (0–255)
     const int PWM_MAX_60 = 153; // 60% of 255
-    int pwmValue = map(amplifiedValue * pwmGain, 0, 4095, 0, PWM_MAX_60);
+    int pwmValue = (int)(gaugeLevel * PWM_MAX_60);
     pwmValue = constrain(pwmValue, 0, PWM_MAX_60);
 
     // Smooth PWM response for stability
