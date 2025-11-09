@@ -52,6 +52,15 @@ void FlipperTask(void* parameter) {
   while(true) {
     // enqueuePrint("State: %d\n", (int)state);
     // currButton = digitalRead(buttonPin);
+    // Trigger toast door first
+    if(toastServoClosed)
+    {
+      toastServo.write(90);
+    }
+    else {
+      toastServo.write(0);
+    }
+
     if(currButton && prevButton == false)
     {
       switch(state) {
@@ -68,6 +77,8 @@ void FlipperTask(void* parameter) {
         }
         case LOAD:
         {
+          // Delay to let bun slide into flipper
+          vTaskDelay(3000 / portTICK_PERIOD_MS);
           // wiggle
           for(int i = 0; i < WIGGLES; i++)
           {
@@ -99,15 +110,6 @@ void FlipperTask(void* parameter) {
         }
       }
     }
-
-    if(toastServoClosed)
-    {
-      toastServo.write(90);
-    }
-    else {
-      toastServo.write(0);
-    }
-
     prevButton = currButton;
     if(currButton)
     {
@@ -131,3 +133,18 @@ void closeToastServo(bool closed)
 {
   toastServoClosed = closed;
 }
+
+/*
+enum state
+{
+0  STATE_B_DETECT_BUTTON, // 1. Go to STATE_B_DROP
+1  STATE_B_DROP,          // 1. Reset gate (butter/toast), Reset flipper (Open Top) | 2. Open bottom dropper | 3. Wait
+2  STATE_B_BUTTER,        // 1. Apply butter | 2. Open gate butter | 3. Wait
+3  STATE_B_TOAST,         // 1. Measure sound & heat | 2. Brand | 3. open gate toast | 4. Wait
+4  STATE_B_DISPENSE,      // 1. Dispense pusher | 2. Wait
+5  STATE_T_DETECT_BUTTON, // 1. Go to STATE_T_DROP
+6  STATE_T_DROP,          // 1. Reset gate (butter/toast), Reset flipper (Close Top) | 2. Open top dropper | 3. Wait
+7  STATE_T_BUTTER,        // 1. Apply butter | 2. Open gate butter | 3. Wait
+8  STATE_T_TOAST,         // 1. Measure sound & heat | 2. Brand | 3. open gate toast | 4. Wait
+9  STATE_T_DISPENSE,      // 1. Dispense flipper | 2. Wait
+};*/

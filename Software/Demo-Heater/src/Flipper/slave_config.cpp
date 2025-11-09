@@ -66,17 +66,11 @@ void OnDataRecv(const uint8_t *mac, const uint8_t *incomingDataPtr, int len)
   // enqueuePrint("Received data: %s\n", incomingData.msg);
 
   // 3. Process message
-  if (strcmp(incomingData.msg, "FSM STATE 5") == 0)
+  if ((strcmp(incomingData.msg, "FSM STATE 4") == 0) || (strcmp(incomingData.msg, "FSM STATE 9") == 0))
   {
-    // Function Call 1
-    if (getFlipperState() != LOAD)
-    {
-      triggerFlipper();
-    }
-  }
-  else if ((strcmp(incomingData.msg, "FSM STATE 4") == 0) || (strcmp(incomingData.msg, "FSM STATE 9") == 0))
-  {
-    // return to idle
+    //  OPEN GATE DISPENSE TOASTED BUN
+    closeToastServo(false);
+    // FLIP DAT BUN
     if (strcmp(incomingData.msg, "FSM STATE 9") == 0)
     {
       // Function Call 2
@@ -85,13 +79,20 @@ void OnDataRecv(const uint8_t *mac, const uint8_t *incomingDataPtr, int len)
         triggerFlipper();
       }
     }
-    closeToastServo(true);
   }
 
-  else if ((strcmp(incomingData.msg, "FSM STATE 2") == 0) || (strcmp(incomingData.msg, "FSM STATE 7") == 0))
+  else if ((strcmp(incomingData.msg, "FSM STATE 1") == 0) || (strcmp(incomingData.msg, "FSM STATE 6") == 0))
   {
-    // Toast gate control at butter step
+    // Toast gate control at drop step
     closeToastServo(true);
+    if (strcmp(incomingData.msg, "FSM STATE 6") == 0)
+    {
+      // GET INTO TOP BUN LOADING POSITION
+      if (getFlipperState() != LOAD)
+      {
+        triggerFlipper();
+      }
+    }
   }
 }
 
