@@ -1,6 +1,7 @@
 // Standalone sketch
 
 #include <Arduino.h>
+#include "slave_config.h"
 
 // -----------------------------
 // Utils
@@ -75,17 +76,17 @@ static void initSerial() {
 }
 
 static void waitForUser() {
-  Serial.println("Type 'y' then press Enter to start:");
+  enqueuePrint("Type 'y' then press Enter to start:\n");
   String input;
   while (true) {
     if (Serial.available()) {
       input = Serial.readStringUntil('\n');
       input.trim();
       if (input.equalsIgnoreCase("y")) {
-        Serial.println("Starting main loop...");
+        enqueuePrint("Starting main loop...\n");
         return;
       } else {
-        Serial.println("Waiting for 'y'...");
+        enqueuePrint("Waiting for 'y'...\n");
       }
     }
   }
@@ -134,7 +135,7 @@ static inline uint16_t angleToUs(uint8_t deg) {
 static void driveDsServoAngle(uint8_t pin, int angleDeg) {
   angleDeg = constrain(angleDeg, 0, 180);
   uint16_t us = angleToUs(static_cast<uint8_t>(angleDeg));
-  if (DEBUG) { Serial.print("DS angle="); Serial.print(angleDeg); Serial.print(" us="); Serial.println(us); }
+  if (DEBUG) { enqueuePrint("DS angle="); enqueuePrint(angleDeg); enqueuePrint(" us="); enqueuePrint("%d\n", us); }
   servoOneFrameWriteUs(pin, us);
 }
 
@@ -208,6 +209,11 @@ void setup() {
   MG995_Servo.attach(OUT1_PIN);
 #endif
 
+  // side effect: spin up Wifi task (and Print task if DEBUG flag set)
+  // note: must be called before while(!Serial)
+  startSlave();
+
+  // BLOCKING!!
   waitForUser();
 }
 
@@ -223,7 +229,7 @@ void loop() {
   // - "close [1|2]"
   // - "b <pause_ms> [1|2]"
   // - "<angle 0..180> [1|2]"
-  Serial.println("DS: enter 'open [1|2]', 'close [1|2]', 'b <pause_ms> [1|2]', or '<angle> [1|2]':");
+  enqueuePrint("DS: enter 'open [1|2]', 'close [1|2]', 'b <pause_ms> [1|2]', or '<angle> [1|2]':\n");
   while (true) {
     // Refresh last commanded angle for active pin if the last cmd was numeric
     driveDsServoAngle(dsActivePin, num);
@@ -270,7 +276,7 @@ void loop() {
   // Input formats:
   // - "<angle 0..180>"
   // - "b <duration_ms> <pause_ms>"
-  Serial.println("TP: enter '<angle 0..180>' or 'b <duration_ms> <pause_ms>':");
+  enqueuePrint("TP: enter '<angle 0..180>' or 'b <duration_ms> <pause_ms>':\n");
   while (true) {
     // Keep last angle commanded
     MG995_Servo.write(constrain(num, 0, 180));
@@ -296,7 +302,7 @@ void loop() {
   }
 
 #elif DS_CONTINUOUS_MOTOR || PARALLAX_MOTOR
-  Serial.println("CR: enter 'r' (right), 'l' (left), 's' (stop), or a number for bounce cycles:");
+  enqueuePrint("CR: enter 'r' (right), 'l' (left), 's' (stop), or a number for bounce cycles:\n");
   while (true) {
     if (dir < 0)      contServoLeft(OUT1_PIN);
     else if (dir > 0) contServoRight(OUT1_PIN);
@@ -311,9 +317,9 @@ void loop() {
 
       char mode = input.charAt(0);
       switch (mode) {
-        case 'r': Serial.println("Right"); dir = 1;  bounceFlag = false; break;
-        case 'l': Serial.println("Left");  dir = -1; bounceFlag = false; break;
-        case 's': Serial.println("Stop");  dir = 0;  bounceFlag = false; break;
+        case 'r': enqueuePrint("Right\n"); dir = 1;  bounceFlag = false; break;
+        case 'l': enqueuePrint("Left\n");  dir = -1; bounceFlag = false; break;
+        case 's': enqueuePrint("Stop\n");  dir = 0;  bounceFlag = false; break;
         default:
           if (isDigit(mode)) { num = MAX(0, (int)(input.toInt())); bounceFlag = true; }
           break;
@@ -322,4 +328,5 @@ void loop() {
     }
   }
 #endif
+  // TODO: add vTaskDelay()
 }
