@@ -4,9 +4,10 @@
 #define OUT1_PIN          (13)
 #define OUT2_PIN          (14)  // TODO!
 #define DEBUG             (0U)
-#define DS_MOTOR          (1U)
+#define DS_MOTOR          (0U)
 #define TOWER_PRO_MOTOR   (0U)
 #define PARALLAX_MOTOR    (0U)
+#define DS_CONTINUOUS_MOTOR  (1U)
 #if DS_MOTOR
 #define POSITIONAL_MOTOR  (DS_MOTOR)
 #define TOP_BUN_CLOSED    (170U)
@@ -15,6 +16,9 @@
 #define BOTTOM_BUN_OPEN      (0U)
 #define CLOSED_STATE      (1U)
 #define OPEN_STATE        (0U)
+#elif DS_CONTINUOUS_MOTOR
+#define CONTINUOUS_MOTOR  (DS_CONTINUOUS_MOTOR)
+// TODO: ...
 #elif TOWER_PRO_MOTOR
 #define POSITIONAL_MOTOR  (TOWER_PRO_MOTOR)
 #elif PARALLAX_MOTOR
@@ -220,22 +224,30 @@ void loop() {
     // continuously drive motor to position
     if (dir < 0)
     {
+#if PARALLAX_MOTOR
       drive_parallax_servo_counterwise(OUT1_PIN);
+#endif
     }
     else if (dir > 0)
     {
+#if PARALLAX_MOTOR
       drive_parallax_servo_clockwise(OUT1_PIN);
+#endif
     }
     else if (bounce_flag)
     {
       // side effect: set dir = 0 when done
+#if PARALLAX_MOTOR
       drive_parallax_servo_bounce(OUT1_PIN, num);
+#endif
       dir = 0;
       bounce_flag = false;
     }
     else
     {
+#if PARALLAX_MOTOR
       drive_parallax_servo_halt(OUT1_PIN);
+#endif
     }
 
     // update position
