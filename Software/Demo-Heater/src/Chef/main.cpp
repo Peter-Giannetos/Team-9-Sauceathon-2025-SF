@@ -38,18 +38,39 @@ volatile bool interruptTriggered = false;
 volatile unsigned long lastInterruptTime = 0;
 const unsigned long interruptDebounce = 100; // 100 ms minimum gap between interrupts
 
+#define MIN_PRESS_TIME 200  // Minimum press duration in ms to register (adjust as needed)
+
+volatile unsigned long pressStartTime = 0;
+volatile bool pressRegistered = false;
+volatile bool pinIsPressed = false;
+
+
 // ISR function
 void IRAM_ATTR handleInterrupt() {
   unsigned long currentTime = millis();
 
-  // Ignore interrupt if triggered too soon after the last one
+  // Simple debounce check
   if ((currentTime - lastInterruptTime) < interruptDebounce) {
     return;
   }
-
   lastInterruptTime = currentTime;
-  interruptTriggered = true;
+
+  int pinState = digitalRead(INTERRUPT_PIN);
+
+  if (pinState == LOW) {
+    // Button press started
+    pressStartTime = currentTime;
+    pinIsPressed = true;
+  } else {
+    // Button released
+    pinIsPressed = false;
+    unsigned long pressDuration = currentTime - pressStartTime;
+    if (pressDuration >= MIN_PRESS_TIME) {
+      pressRegistered = true;
+    }
+  }
 }
+
 
 
 //===================================================================================================
@@ -293,9 +314,9 @@ void setup() {
 
   // 1.1 Attach hardware interrupt
   pinMode(INTERRUPT_PIN, INPUT_PULLUP);  // Expecting a LOW signal to trigger
-  attachInterrupt(digitalPinToInterrupt(INTERRUPT_PIN), handleInterrupt, FALLING);
+attachInterrupt(digitalPinToInterrupt(INTERRUPT_PIN), handleInterrupt, CHANGE);
 
-  // // 1.2 Init Servo
+  // 1.2 Init Servo
   // towerProInit(MOTOR_PIN_GATE);
 
   // 2. Pin setup PWM
@@ -456,20 +477,19 @@ void loop() {
   }
 
   // 5. Service interrupt
-    if (interruptTriggered) {
-    interruptTriggered = false;
-    enqueuePrint("Interrupt triggered at %lu ms\n", millis());
-    
-    if(fsm == STATE_T_DETECT_BUTTON)
-    {
-      fsm = STATE_T_DROP; // Begin 2nd FSM sequence
-    }
-    else
-    {
-      fsm = STATE_B_DROP; // Begin FSM sequence
-    }
-    
+if (pressRegistered) {
+  pressRegistered = false;
+  enqueuePrint("Press registered after min time at %lu ms\n", millis());
+
+  if(fsm == STATE_T_DETECT_BUTTON)
+  {
+    fsm = STATE_T_DROP; // Begin 2nd FSM sequence
   }
+  else
+  {
+    fsm = STATE_B_DROP; // Begin FSM sequence
+  }
+}
 
     // 5. FSM State Machine Execution
   static unsigned long fsmStartTime = 0;
