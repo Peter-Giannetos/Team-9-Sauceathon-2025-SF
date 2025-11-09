@@ -4,6 +4,7 @@
 #include <Arduino.h>
 #include "tower_pro_motor.h"
 #include "servo_util.h"
+#include <Servo.h>
 
 /* Externs */
 Servo MG995_servo;

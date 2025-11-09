@@ -44,6 +44,9 @@ void setup() {
       }
     }
   }
+
+
+  towerProBounce(3000, 3000)
 }
 
 void loop() {

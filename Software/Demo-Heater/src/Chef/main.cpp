@@ -2,6 +2,7 @@
 #include <WiFi.h>
 #include <esp_now.h>
 #include <Adafruit_NeoPixel.h>
+// #include "tower_pro_motor.h"
 
 
 //===================================================================================================
@@ -12,6 +13,7 @@
 #define NEOPIXEL_PIN    (14)
 #define NUMPIXELS       (16)
 #define SOUND_PIN       (34)
+// #define MOTOR_PIN_GATE  (27)
 
 #define PERIOD_LED_ERROR  (200)
 #define PERIOD_LED_GOOD   (1000)
@@ -27,10 +29,11 @@
 
 
 
+
 //===================================================================================================
 // Hardware Interrupt
 
-#define INTERRUPT_PIN (27)
+#define INTERRUPT_PIN (26)
 volatile bool interruptTriggered = false;
 volatile unsigned long lastInterruptTime = 0;
 const unsigned long interruptDebounce = 100; // 100 ms minimum gap between interrupts
@@ -67,16 +70,20 @@ enum state {
 
 state fsm = STATE_B_DETECT_BUTTON;
 
-#define DELAY_B_DROP_WAIT            500   // STATE_B_DROP: Wait after opening bottom dropper
-#define DELAY_B_BUTTER_WAIT          400   // STATE_B_BUTTER: Wait after opening butter gate
-#define DELAY_B_TOAST_WAIT           700   // STATE_B_TOAST: Wait after opening toast gate
-#define DELAY_B_DISPENSE_WAIT        300   // STATE_B_DISPENSE: Wait after dispensing pusher
+#define DELAY_B_DROP_WAIT            5000   // STATE_B_DROP: Wait after opening bottom dropper
+#define DELAY_B_BUTTER_WAIT          4000   // STATE_B_BUTTER: Wait after opening butter gate
+#define DELAY_B_TOAST_WAIT           7000   // STATE_B_TOAST: Wait after opening toast gate
+#define DELAY_B_DISPENSE_WAIT        3000   // STATE_B_DISPENSE: Wait after dispensing pusher
 
-#define DELAY_T_DROP_WAIT            500   // STATE_T_DROP: Wait after opening top dropper
-#define DELAY_T_BUTTER_WAIT          400   // STATE_T_BUTTER: Wait after opening butter gate
-#define DELAY_T_TOAST_WAIT           700   // STATE_T_TOAST: Wait after opening toast gate
-#define DELAY_T_DISPENSE_WAIT        300   // STATE_T_DISPENSE: Wait after dispensing flipper
+#define DELAY_T_DROP_WAIT            5000   // STATE_T_DROP: Wait after opening top dropper
+#define DELAY_T_BUTTER_WAIT          4000   // STATE_T_BUTTER: Wait after opening butter gate
+#define DELAY_T_TOAST_WAIT           7000   // STATE_T_TOAST: Wait after opening toast gate
+#define DELAY_T_DISPENSE_WAIT        3000   // STATE_T_DISPENSE: Wait after dispensing flipper
 
+
+// Board Specific Values
+#define DELAY_STATE_TOAST  (4000)
+// servo calibration
 
 //===================================================================================================
 // Initialization Variables
@@ -117,7 +124,6 @@ char outgoingMsg[32] = "Hello ESP-NOW";  // Default message - Modify with new me
  * 2. Send wifi
  * 3. Keep reboradcasting message until ready for next state (Incase packet was not received)
  * 4. Read message and react once until message from device changes
- * 
  */
 
 
@@ -267,7 +273,7 @@ void wifiTask(void* parameter) {
     esp_err_t result = esp_now_send(broadcastAddress, (uint8_t*)&outgoingData, sizeof(outgoingData));
 
     if (result == ESP_OK) {
-      enqueuePrint("Sent with success\n");
+      // enqueuePrint("Sent with success\n");
     } else {
       enqueuePrint("Error sending the data\n");
     }
@@ -283,12 +289,14 @@ void setup() {
   // 1. Init LED pin
   pinMode(LED_PIN, OUTPUT);
   pinMode(SOUND_PIN, INPUT);
+  // pinMode(MOTOR_PIN_GATE, OUTPUT);
 
   // 1.1 Attach hardware interrupt
   pinMode(INTERRUPT_PIN, INPUT_PULLUP);  // Expecting a LOW signal to trigger
   attachInterrupt(digitalPinToInterrupt(INTERRUPT_PIN), handleInterrupt, FALLING);
 
-
+  // // 1.2 Init Servo
+  // towerProInit(MOTOR_PIN_GATE);
 
   // 2. Pin setup PWM
   ledcSetup(PWM_DEFAULT_CHANNEL, PWM_DEFAULT_FREQ, PWM_DEFAULT_RESOLUTION);
@@ -424,13 +432,6 @@ void loop() {
     int step = (int)(gaugeLevel * (NUMPIXELS - 1));
     step = constrain(step, 0, NUMPIXELS - 1);
 
-    // Debug output every 100ms to monitor values
-    static unsigned long lastDebugMillis = 0;
-    if (currentMillis - lastDebugMillis >= 100) {
-      lastDebugMillis = currentMillis;
-      enqueuePrint("Sound: %d, Smooth: %.0f, Gauge: %.2f, Step: %d\n", 
-                   soundValue, smoothValue, gaugeLevel, step);
-    }
 
     displayEnhancedBrightnessGradient(step);
 
@@ -445,9 +446,12 @@ void loop() {
     smoothPWM = smoothPWM * (1 - pwmAlpha) + pwmValue * pwmAlpha;
 
     // Write PWM signal based on sound intensity
-    if(audioMode)
+    if(audioMode && fsm == DELAY_B_TOAST_WAIT || fsm == DELAY_T_TOAST_WAIT)
     {
       ledcWrite(PWM_DEFAULT_CHANNEL, (int)smoothPWM);
+    }
+    else if (audioMode) {
+      ledcWrite(PWM_DEFAULT_CHANNEL, (int)0); // Turn off othersie
     }
   }
 
@@ -455,9 +459,104 @@ void loop() {
     if (interruptTriggered) {
     interruptTriggered = false;
     enqueuePrint("Interrupt triggered at %lu ms\n", millis());
-    // Add your interrupt-handling logic here
+    
+    if(fsm == STATE_T_DETECT_BUTTON)
+    {
+      fsm = STATE_T_DROP; // Begin 2nd FSM sequence
+    }
+    else
+    {
+      fsm = STATE_B_DROP; // Begin FSM sequence
+    }
     
   }
+
+    // 5. FSM State Machine Execution
+  static unsigned long fsmStartTime = 0;
+  static bool fsmActive = false;
+  static unsigned long lastBroadcastTime = 0;
+  const unsigned long broadcastInterval = 500; // ms between state broadcasts
+
+  // Start FSM cycle if just triggered
+  if (!fsmActive && fsm != STATE_B_DETECT_BUTTON) {
+    fsmActive = true;
+    fsmStartTime = currentMillis;
+    // enqueuePrint("FSM entered state %d at %lu ms\n", fsm, currentMillis);
+  }
+
+  // Regular FSM loop
+  if (fsmActive) {
+    unsigned long elapsed = currentMillis - fsmStartTime;
+    unsigned long waitTime = 0;
+    state nextState = fsm; // Default: no change
+
+    // Determine wait time and next state
+    switch (fsm) {
+
+      // Buttom Bun
+      case STATE_B_DROP:
+        waitTime = DELAY_B_DROP_WAIT;
+        nextState = STATE_B_BUTTER;
+        break;
+      case STATE_B_BUTTER:
+        waitTime = DELAY_B_BUTTER_WAIT;
+        nextState = STATE_B_TOAST;
+        break;
+      case STATE_B_TOAST:
+        waitTime = DELAY_B_TOAST_WAIT;
+        nextState = STATE_B_DISPENSE;
+        break;
+      case STATE_B_DISPENSE:
+        waitTime = DELAY_B_DISPENSE_WAIT;
+        nextState = STATE_T_DETECT_BUTTON;
+        break;
+
+      // Top Bun
+      case STATE_T_DROP:
+        waitTime = DELAY_T_DROP_WAIT;
+        nextState = STATE_T_BUTTER;
+        break;
+      case STATE_T_BUTTER:
+        waitTime = DELAY_T_BUTTER_WAIT;
+        nextState = STATE_T_TOAST;
+        break;
+      case STATE_T_TOAST:
+        waitTime = DELAY_T_TOAST_WAIT;
+        nextState = STATE_T_DISPENSE;
+        break;
+      case STATE_T_DISPENSE:
+        waitTime = DELAY_T_DISPENSE_WAIT;
+        nextState = STATE_B_DETECT_BUTTON;
+        break;
+
+      default:
+        fsmActive = false;
+        break;
+    }
+
+    // Transition when delay passes
+    if (fsmActive && elapsed >= waitTime && waitTime > 0) {
+      fsm = nextState;
+      fsmStartTime = currentMillis;
+      enqueuePrint("FSM transitioned to state %d at %lu ms\n", fsm, currentMillis);
+    }
+
+    // Always broadcast current FSM state at a fixed interval
+    if (currentMillis - lastBroadcastTime >= broadcastInterval) {
+      lastBroadcastTime = currentMillis;
+      snprintf(outgoingMsg, sizeof(outgoingMsg), "FSM STATE %d", fsm);
+      strcpy(outgoingData.msg, outgoingMsg);
+      esp_now_send(NULL, (uint8_t*)&outgoingData, sizeof(outgoingData));
+    }
+  }
+
+  // // 6. Run Toast Arm
+  // if ((fsm == STATE_B_TOAST || fsm == STATE_T_TOAST) &&
+  //     (millis() - fsmStartTime >= DELAY_STATE_TOAST)) {
+  //       enqueuePrint("DRIVE MOTOR");
+  //       towerProBounce(3000, 3000);
+  // }
+
 
   // 6. Parse serial input
   if (Serial.available()) {
