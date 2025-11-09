@@ -15,76 +15,99 @@ const long helloInterval = 10000;   // 10 seconds
 
 bool ledState = LOW;
 
-const int pwmFreq = 1000;    // 1 kHz
+// PWM configuration
+const int pwmFreq = 1000;      // 1 kHz
 const int pwmChannel = 0;
-const int pwmResolution = 8; // 8-bit: 0-255
-int pwmDutyCycle = 0;      // default 50%
+const int pwmResolution = 8;   // 8-bit: 0–255
+int pwmDutyCycle = 0;
 
-// Example data structure for ESP-NOW
+// ESP-NOW message structure
 typedef struct struct_message {
   char msg[32];
   int value;
 } struct_message;
 
 struct_message incomingData;
-struct_message outgoingData;
+struct_message outgoingData; 
 
-// Task handle for WiFi/ESP-NOW task
+// Task handles
 TaskHandle_t TaskWiFiHandle = NULL;
+TaskHandle_t TaskPrintHandle = NULL;
 
-// Callback when data is received
-void OnDataRecv(const uint8_t * mac, const uint8_t *incomingData, int len) {
-  memcpy(&incomingData, incomingData, sizeof(incomingData));
-  Serial.print("Received data: ");
-  Serial.println(incomingData.msg);
-  // You can add custom processing here
+// Print queue and buffer
+QueueHandle_t printQueue;
+const int PRINT_BUFFER_SIZE = 128;
+
+// Sends formatted strings to queue (copies data instead of pointer)
+void enqueuePrint(const char* fmt, ...) {
+  char tempBuf[PRINT_BUFFER_SIZE];
+  va_list args;
+  va_start(args, fmt);
+  vsnprintf(tempBuf, PRINT_BUFFER_SIZE, fmt, args);
+  va_end(args);
+  xQueueSend(printQueue, tempBuf, 10 / portTICK_PERIOD_MS);
 }
 
-// Callback when data is sent
-void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
-  Serial.print("Last Packet Send Status: ");
-  Serial.println(status == ESP_NOW_SEND_SUCCESS ? "Success" : "Fail");
+// Print task: reads messages and prints them
+void printTask(void* parameter) {
+  char localBuffer[PRINT_BUFFER_SIZE];
+  while (true) {
+    if (xQueueReceive(printQueue, localBuffer, portMAX_DELAY)) {
+      Serial.print(localBuffer);
+    }
+  }
 }
 
-void wifiTask(void * parameter) {
-  Serial.println("WiFi Task started on core: " + String(xPortGetCoreID()));
+// ESP-NOW receive callback
+void OnDataRecv(const uint8_t* mac, const uint8_t* incomingDataPtr, int len) {
+  memcpy(&incomingData, incomingDataPtr, sizeof(incomingData));
+  enqueuePrint("Received data: %s\n", incomingData.msg);
+}
 
-  // Initialize WiFi in station mode
+// ESP-NOW send callback
+void OnDataSent(const uint8_t* mac_addr, esp_now_send_status_t status) {
+  enqueuePrint("Last Packet Send Status: %s\n",
+               status == ESP_NOW_SEND_SUCCESS ? "Success" : "Fail");
+}
+
+// ESP-NOW WiFi task
+void wifiTask(void* parameter) {
+  enqueuePrint("WiFi Task started on core: %d\n", xPortGetCoreID());
+
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
 
   if (esp_now_init() != ESP_OK) {
-    Serial.println("Error initializing ESP-NOW");
+    enqueuePrint("Error initializing ESP-NOW\n");
     vTaskDelete(NULL);
   }
 
   esp_now_register_recv_cb(OnDataRecv);
   esp_now_register_send_cb(OnDataSent);
 
-  // Add a peer example — change MAC address to your receiver MAC
+  // Add broadcast peer
   esp_now_peer_info_t peerInfo = {};
-  uint8_t broadcastAddress[] = {0xFF,0xFF,0xFF,0xFF,0xFF,0xFF};
+  uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
   memcpy(peerInfo.peer_addr, broadcastAddress, 6);
-  peerInfo.channel = 0;  
+  peerInfo.channel = 0;
   peerInfo.encrypt = false;
 
   if (!esp_now_is_peer_exist(broadcastAddress)) {
     if (esp_now_add_peer(&peerInfo) != ESP_OK) {
-      Serial.println("Failed to add peer");
+      enqueuePrint("Failed to add peer\n");
     }
   }
 
   while (1) {
-    // Example sending every 5 seconds
     strcpy(outgoingData.msg, "Hello ESP-NOW");
     outgoingData.value = millis() / 1000;
 
-    esp_err_t result = esp_now_send(broadcastAddress, (uint8_t *) &outgoingData, sizeof(outgoingData));
+    esp_err_t result = esp_now_send(broadcastAddress, (uint8_t*)&outgoingData, sizeof(outgoingData));
 
     if (result == ESP_OK) {
-      Serial.println("Sent with success");
+      enqueuePrint("Sent with success\n");
     } else {
-      Serial.println("Error sending the data");
+      enqueuePrint("Error sending the data\n");
     }
     vTaskDelay(5000 / portTICK_PERIOD_MS);
   }
@@ -95,12 +118,31 @@ void setup() {
   pinMode(OUT_PIN, OUTPUT);
   Serial.begin(115200);
 
+  // Create a queue with 10 message slots
+  printQueue = xQueueCreate(10, PRINT_BUFFER_SIZE);
+
+  if (printQueue == NULL) {
+    Serial.println("Failed to create print queue!");
+    while (1);
+  }
+
+  // Start print task (core 0)
+  xTaskCreatePinnedToCore(
+    printTask,
+    "Print Task",
+    4096,
+    NULL,
+    1,
+    &TaskPrintHandle,
+    0
+  );
+
   // Setup PWM
   ledcSetup(pwmChannel, pwmFreq, pwmResolution);
   ledcAttachPin(PWM_PIN, pwmChannel);
   ledcWrite(pwmChannel, pwmDutyCycle);
 
-  Serial.println("Type 'GO' then press Enter to start:");
+  enqueuePrint("Type 'GO' then press Enter to start:\n");
 
   String input;
   while (!ready) {
@@ -109,33 +151,33 @@ void setup() {
       input.trim();
       if (input.equalsIgnoreCase("GO")) {
         ready = true;
-        Serial.println("Starting main loop...");
-        Serial.println("You can enter 'ON', 'OFF', or a PWM value (0–100).");
+        enqueuePrint("Starting main loop...\n");
+        enqueuePrint("You can enter 'ON', 'OFF', or a PWM value (0–100).\n");
       } else {
-        Serial.println("Waiting for 'GO'...");
+        enqueuePrint("Waiting for 'GO'...\n");
       }
     }
+    vTaskDelay(100 / portTICK_PERIOD_MS);
   }
 
-  // Start WiFi/ESP-NOW task pinned to core 1
+  // Start WiFi task on core 1
   xTaskCreatePinnedToCore(
-    wifiTask,   // Function to run
-    "WiFi Task",// Name of task
-    10000,     // Stack size
-    NULL,      // Parameter to pass
-    1,          // Priority
-    &TaskWiFiHandle, // Task handle
-    1);         // Core to run on (1 = second core)
+    wifiTask,
+    "WiFi Task",
+    10000,
+    NULL,
+    1,
+    &TaskWiFiHandle,
+    1
+  );
 
-
-  Serial.println(WiFi.macAddress());
-
+  enqueuePrint("MAC Address: %s\n", WiFi.macAddress().c_str());
 }
 
 void loop() {
   unsigned long currentMillis = millis();
 
-  // Non-blocking LED blink every 1 second
+  // Blink LED every second
   if (currentMillis - previousMillisLED >= ledInterval) {
     previousMillisLED = currentMillis;
     ledState = !ledState;
@@ -145,31 +187,29 @@ void loop() {
   // Print "Hello" every 10 seconds
   if (currentMillis - previousMillisHello >= helloInterval) {
     previousMillisHello = currentMillis;
-    Serial.print("Hello! Time since boot: ");
-    Serial.print(currentMillis);
-    Serial.println(" ms");
+    enqueuePrint("Hello! Time since boot: %lu ms\n", currentMillis);
   }
 
-  // Serial input for commands
+  // Command handling
   if (Serial.available()) {
     String cmd = Serial.readStringUntil('\n');
     cmd.trim();
 
     if (cmd.equalsIgnoreCase("ON")) {
       digitalWrite(OUT_PIN, HIGH);
-      Serial.println("OUT_PIN turned ON");
+      enqueuePrint("OUT_PIN turned ON\n");
     } else if (cmd.equalsIgnoreCase("OFF")) {
       digitalWrite(OUT_PIN, LOW);
-      Serial.println("OUT_PIN turned OFF");
+      enqueuePrint("OUT_PIN turned OFF\n");
     } else if (cmd.toInt() >= 0 && cmd.toInt() <= 100) {
       int userValue = cmd.toInt();
       pwmDutyCycle = map(userValue, 0, 100, 0, 255);
       ledcWrite(pwmChannel, pwmDutyCycle);
-      Serial.print("PWM duty cycle set to ");
-      Serial.print(userValue);
-      Serial.println("%");
+      enqueuePrint("PWM duty cycle set to %d%%\n", userValue);
     } else {
-      Serial.println("Unknown command. Use ON, OFF, or a number (0–100).");
+      enqueuePrint("Unknown command. Use ON, OFF, or a number (0–100).\n");
     }
   }
+
+  vTaskDelay(20 / portTICK_PERIOD_MS);
 }
