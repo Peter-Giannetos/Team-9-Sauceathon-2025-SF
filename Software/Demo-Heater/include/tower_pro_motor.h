@@ -9,16 +9,16 @@
 // -----------------------------
 // TowerPro MG995 (Servo lib)
 // -----------------------------
-Servo MG995_Servo;
+extern Servo MG995_servo;
 constexpr uint8_t TOWER_PRO_FORWARD   = 0;
 constexpr uint8_t TOWER_PRO_BACKWARD  = 180;
 constexpr uint8_t TOWER_PRO_HALT      = 90;
 
 /* Public Function Definitions */
-void towerProInit();
+void towerProInit(int pin);
 void towerProClockwise();
 void towerProCounterwise();
 void towerProHalt();
-void towerProBounce(uint16_t);
+void towerProBounce(uint16_t durationMs, uint16_t pauseMs);
 
 #endif // TOWER_PRO_MOTOR_H
