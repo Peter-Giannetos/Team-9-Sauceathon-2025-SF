@@ -18,7 +18,7 @@ unsigned long previousMillisSound = 0;
 
 const long ledInterval = 1000;
 const long helloInterval = 10000;
-const long soundInterval = 10;  // from 200 ms to 20 ms (10× faster)
+const long soundInterval = 20;  // More frequent updates for faster reaction
 
 uint32_t interpolateColor(uint8_t r1, uint8_t g1, uint8_t b1,
                           uint8_t r2, uint8_t g2, uint8_t b2,
@@ -74,9 +74,9 @@ void displayEnhancedBrightnessGradient(int step) {
       color = interpolateColor(255, 120, 0, 255, 0, 0, t);
     }
 
-    uint8_t r = (uint8_t)(((color >> 16) & 0xFF) * globalBrightness);
-    uint8_t g = (uint8_t)(((color >> 8) & 0xFF) * globalBrightness);
-    uint8_t b = (uint8_t)((color & 0xFF) * globalBrightness);
+    uint8_t r = ((color >> 16) & 0xFF) * globalBrightness;
+    uint8_t g = ((color >> 8) & 0xFF) * globalBrightness;
+    uint8_t b = (color & 0xFF) * globalBrightness;
 
     if (i <= step)
       strip.setPixelColor(i, r, g, b);
@@ -103,24 +103,41 @@ void loop() {
     Serial.println(" ms");
   }
 
-  // Faster and more sensitive sound reading
   if (currentMillis - previousMillisSound >= soundInterval) {
     previousMillisSound = currentMillis;
 
     int soundValue = analogRead(SOUND_PIN);
 
-    // Optional smoothing to reduce noise spikes
-    static int smoothValue = 0;
-    smoothValue = (smoothValue * 3 + soundValue) / 4;  // simple moving average
+    // Faster smoothing for spikes
+    static float smoothValue = 0;
+    float alpha = 0.15;
+    smoothValue = smoothValue * (1 - alpha) + soundValue * alpha;
 
-    Serial.print("Sound intensity: ");
-    Serial.println(smoothValue);
+    // Envelope detector with dynamic decay based on activity
+    static float level = 0;
+    float decayRate = 0.92; // base decay (faster when quiet)
 
-    // Increase sensitivity by scaling the lower sound values upward
-    int amplifiedValue = constrain((smoothValue - 500) * 2, 0, 4095); 
+    if (smoothValue > 1500) {
+      decayRate = 0.97; // slow decay for loud sounds
+    } else if (smoothValue > 800) {
+      decayRate = 0.95; // medium decay
+    } // else keep base decay
+
+    if (smoothValue > level) {
+      // Fast rise for responsiveness
+      level = smoothValue + (smoothValue - level) * 0.5;
+    } else {
+      // Dynamic decay
+      level *= decayRate;
+    }
+
+    if (level < 70) level = 70;
+
+    float amplified = (level - 500) * 3.2;
+    int amplifiedValue = constrain(amplified, 0, 4095);
     int step = map(amplifiedValue, 0, 4095, 0, NUMPIXELS - 1);
-
     step = constrain(step, 0, NUMPIXELS - 1);
+
     displayEnhancedBrightnessGradient(step);
   }
 
