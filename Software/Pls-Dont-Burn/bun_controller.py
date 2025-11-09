@@ -10,6 +10,7 @@ import os
 import io
 import wave
 import time
+import contextlib
 import logging
 import textwrap
 from dataclasses import dataclass, field
@@ -32,9 +33,11 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Personality prompt for the AI voice
-PERSONALITY_PROMPT = """You are a chill Gen Z AI from the Toronto GTA with a light roadman vibe. Respond casually and helpfully, mixing in Gen Z slang like "bet," "lit," "sus," and Toronto terms like "wagwan," "fam", naturally. Keep answers short, no cap, and always vibe check the user's needs—be direct but fun, styll."""
+PERSONALITY_PROMPT = """You are a chill Gen Z AI with an American accent and vibe. Respond casually and helpfully, mixing in modern American slang like "bet," "lit," "no cap," and "sheesh" naturally. Keep answers short and always consider the user's needs—be direct but fun, with an upbeat American energy."""
 
 DEFAULT_VOICE_NAME = "Sadaltager"
+
+TRANSCRIPTION_TIMEOUT_SECONDS = 20
 
 
 def describe_volume(volume_db: float) -> str:
@@ -237,6 +240,11 @@ class BunController:
             http_options={"api_version": "v1alpha"},
         )
         self.model = "gemini-2.5-flash-native-audio-preview-09-2025"
+        
+        # Separate client for standard API calls (transcription)
+        self.standard_client = genai.Client(api_key=api_key)
+        self.transcription_model = "gemini-2.0-flash-exp"
+        
         logger.info(
             "BunController configured with voice '%s' using Gemini Live API (v1alpha, affective dialog enabled)",
             self.voice_name,
@@ -246,13 +254,57 @@ class BunController:
         """Create context message to send before audio input"""
         return self.config.build_prompt(volume_db)
 
+    async def transcribe_audio(self, audio_wav: bytes) -> str:
+        """Transcribe audio using the standard Gemini API."""
+        if not audio_wav:
+            logger.warning("Transcription skipped: empty audio buffer")
+            return ""
+
+        try:
+            response = await self.standard_client.aio.models.generate_content(
+                model=self.transcription_model,
+                contents=[
+                    types.Content(
+                        role="user",
+                        parts=[
+                            types.Part(text="Transcribe the following audio verbatim."),
+                            types.Part(
+                                inline_data=types.Blob(
+                                    data=audio_wav, mime_type="audio/wav"
+                                )
+                            ),
+                        ],
+                    )
+                ],
+            )
+        except Exception as exc:
+            logger.error("Transcription request failed: %s", exc, exc_info=True)
+            return ""
+
+        transcript_parts = []
+        for candidate in getattr(response, "candidates", []) or []:
+            content = getattr(candidate, "content", None)
+            if not content:
+                continue
+            for part in getattr(content, "parts", []) or []:
+                text = getattr(part, "text", None)
+                if text:
+                    transcript_parts.append(text)
+
+        transcript = " ".join(transcript_parts).strip()
+        if not transcript:
+            logger.warning("Transcription produced no text")
+        return transcript
+
     async def process_interaction(self, audio_data, volume_db, audio_wav=None):
         """
         Process user audio with Gemini Live API
-        Returns: (audio_response_bytes, text_response, burn_level, streamed_live)
+        Returns: (audio_response_bytes, text_response, burn_level, streamed_live, timings_dict)
         """
         logger.info("AI is judging your plea...")
+        timings = {}
 
+        t0 = time.time()
         config = types.LiveConnectConfig(
             response_modalities=["AUDIO"],
             enable_affective_dialog=True,
@@ -264,12 +316,33 @@ class BunController:
                 )
             ),
         )
+        timings['config_creation'] = time.time() - t0
         logger.debug(
             "Live session config: audio response with voice '%s' and affective dialog enabled",
             self.voice_name,
         )
 
+        t0 = time.time()
         audio_wav = audio_wav or self.recorder.audio_to_wav(audio_data)
+        context_msg = self.create_context_message(volume_db)
+        timings['prompt_creation'] = time.time() - t0
+
+        transcription_task = None
+        transcription_start = None
+        # Only run transcription in debug mode
+        if audio_wav and logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "Starting parallel transcription task (%d bytes)", len(audio_wav)
+            )
+            transcription_start = time.time()
+            transcription_task = asyncio.create_task(
+                self.transcribe_audio(audio_wav)
+            )
+        elif audio_wav:
+            logger.debug("Transcription skipped (not in debug mode)")
+        else:
+            logger.warning("No audio WAV available for transcription task")
+
         inline_audio = types.Part(
             inline_data=types.Blob(
                 data=audio_wav,
@@ -281,14 +354,21 @@ class BunController:
         text_response = ""
         outcome_value = None
         streamed_audio_seconds = 0.0
-        min_stream_seconds_after_outcome = 1.5
+        min_stream_seconds_after_outcome = 0.5
         player = AudioStreamPlayer() if self.stream_audio else None
+        
+        first_chunk_time = None
+        first_response_time = None
+        outcome_detected_time = None
+        stream_end_time = None
 
         try:
+            t0 = time.time()
             async with self.client.aio.live.connect(model=self.model, config=config) as session:
+                timings['api_connect'] = time.time() - t0
                 logger.debug("Connected to Gemini Live API")
 
-                context_msg = self.create_context_message(volume_db)
+                t0 = time.time()
                 logger.debug(
                     "Sending combined prompt/audio (length %d): %s",
                     len(context_msg),
@@ -303,18 +383,30 @@ class BunController:
                         ],
                     )
                 )
+                timings['send_content'] = time.time() - t0
 
                 logger.debug("Awaiting Gemini response stream")
+                stream_start = time.time()
 
                 response_count = 0
                 async for response in session.receive():
                     response_count += 1
+                    if first_response_time is None:
+                        first_response_time = time.time()
+                        timings['time_to_first_response'] = first_response_time - stream_start
+                        logger.info(f"⏱️  Time to first response: {timings['time_to_first_response']:.3f}s")
+                    
                     logger.debug(f"Response #{response_count}: {type(response)}")
 
                     for part in iter_model_parts(response):
                         inline_data = getattr(part, "inline_data", None)
                         if inline_data and inline_data.data:
                             chunk = inline_data.data
+                            if first_chunk_time is None:
+                                first_chunk_time = time.time()
+                                timings['time_to_first_audio_chunk'] = first_chunk_time - stream_start
+                                logger.info(f"⏱️  Time to first audio chunk: {timings['time_to_first_audio_chunk']:.3f}s")
+                            
                             audio_chunks.append(chunk)
                             streamed_audio_seconds += len(chunk) / (2 * 24000)
                             logger.debug(
@@ -333,10 +425,13 @@ class BunController:
                             if outcome_value is None:
                                 outcome_value = self.try_extract_outcome(text_response)
                                 if outcome_value is not None:
+                                    outcome_detected_time = time.time()
+                                    timings['time_to_outcome_detection'] = outcome_detected_time - stream_start
                                     logger.debug(
-                                        "Outcome detected early: %s %s",
+                                        "Outcome detected early: %s %s (at %.3fs)",
                                         self.config.outcome_label,
                                         outcome_value,
+                                        timings['time_to_outcome_detection'],
                                     )
 
                     if (
@@ -349,6 +444,8 @@ class BunController:
                         )
                         break
 
+                stream_end_time = time.time()
+                timings['streaming_duration'] = stream_end_time - stream_start
                 logger.info(
                     "Received %d audio chunks and %d characters of text",
                     len(audio_chunks),
@@ -357,6 +454,10 @@ class BunController:
 
         except Exception as e:
             logger.error(f"Error during Gemini interaction: {e}", exc_info=True)
+            if transcription_task:
+                transcription_task.cancel()
+                with contextlib.suppress(Exception):
+                    await transcription_task
             raise
         finally:
             if player:
@@ -379,11 +480,59 @@ class BunController:
 
         streamed_live = bool(player and player.frames_written > 0)
 
+        transcript = ""
+        if transcription_task:
+            t0 = time.time()
+            try:
+                transcript = await asyncio.wait_for(
+                    transcription_task, timeout=TRANSCRIPTION_TIMEOUT_SECONDS
+                )
+            except asyncio.TimeoutError:
+                logger.error(
+                    "Transcription task timed out after %s seconds",
+                    TRANSCRIPTION_TIMEOUT_SECONDS,
+                )
+            except asyncio.CancelledError:
+                logger.warning("Transcription task cancelled before completion")
+            except Exception as exc:
+                logger.error("Transcription task failed: %s", exc, exc_info=True)
+            else:
+                transcript = transcript.strip()
+                if transcript:
+                    logger.info("[Transcript] %s", transcript)
+                else:
+                    logger.warning("Transcription task completed but returned empty text")
+            finally:
+                timings['transcription_wait'] = time.time() - t0
+                if transcription_start:
+                    timings['transcription_total'] = time.time() - transcription_start
+        else:
+            logger.debug("Transcription task was not started")
+
+        # Log streaming performance metrics
+        logger.info("=== GEMINI API PERFORMANCE ===")
+        if 'time_to_first_response' in timings:
+            logger.info(f"  Time to first response: {timings['time_to_first_response']:.3f}s")
+        if 'time_to_first_audio_chunk' in timings:
+            logger.info(f"  Time to first audio chunk: {timings['time_to_first_audio_chunk']:.3f}s")
+        if 'streaming_duration' in timings:
+            logger.info(f"  Total streaming duration: {timings['streaming_duration']:.3f}s")
+        if 'time_to_outcome_detection' in timings:
+            logger.info(f"  Time to outcome detection: {timings['time_to_outcome_detection']:.3f}s")
+        if 'transcription_total' in timings:
+            logger.info(f"  Transcription total time: {timings['transcription_total']:.3f}s")
+        if 'transcription_wait' in timings:
+            logger.info(f"  Transcription await time: {timings['transcription_wait']:.3f}s")
+        logger.info(f"  Audio chunks received: {len(audio_chunks)}")
+        logger.info(f"  Total audio duration: {streamed_audio_seconds:.2f}s")
+        logger.info("==============================")
+
         return (
             audio_bytes,
             text_response,
             outcome_value,
             streamed_live,
+            timings,
         )
 
     def try_extract_outcome(self, text):
@@ -466,23 +615,36 @@ class BunController:
     async def run_cycle_async(self):
         """Execute one complete cycle (async version)"""
         start_time = time.time()
+        timings = {}
 
         # Step 1: Taunt user
+        t0 = time.time()
         self.initial_taunt()
+        timings['taunt'] = time.time() - t0
 
         # Step 2: Record user response (5 seconds)
+        t0 = time.time()
         audio_data, volume_db = self.recorder.record_audio(duration=5)
+        timings['recording'] = time.time() - t0
+        
+        t0 = time.time()
         audio_wav = self.recorder.audio_to_wav(audio_data)
+        timings['wav_conversion'] = time.time() - t0
 
         # Step 3: Process with Gemini Live API
+        t0 = time.time()
         (
             audio_response,
             text_response,
             outcome_value,
             streamed_live,
+            gemini_timings,
         ) = await self.process_interaction(
             audio_data, volume_db, audio_wav=audio_wav
         )
+        timings['gemini_processing'] = time.time() - t0
+        # Merge gemini timings into main timings
+        timings.update({f'gemini_{k}': v for k, v in gemini_timings.items()})
 
         # Step 4: Display results
         logger.info(f"AI Response: {text_response}")
@@ -498,18 +660,28 @@ class BunController:
             logger.info("%s: %s", self.config.outcome_label, outcome_value)
 
         # Step 5: Play audio response (only if we did not already stream it live)
+        t0 = time.time()
         if not streamed_live:
             logger.info("Playing AI response...")
             self.play_audio(audio_response)
         else:
             logger.info("Audio was streamed live during model response")
+        timings['audio_playback'] = time.time() - t0
 
         # Save audio for debugging
+        t0 = time.time()
         self.save_audio(audio_response, "ai_response.wav")
+        timings['save_audio'] = time.time() - t0
 
         # Calculate total time
         elapsed = time.time() - start_time
         logger.info(f"Total cycle time: {elapsed:.2f} seconds")
+        
+        # Log detailed timing breakdown
+        logger.info("=== TIMING BREAKDOWN ===")
+        for stage, duration in timings.items():
+            logger.info(f"  {stage}: {duration:.3f}s ({duration/elapsed*100:.1f}%)")
+        logger.info("========================")
 
         if elapsed > 10:
             logger.warning(f"Cycle exceeded 10 second requirement! ({elapsed:.2f}s)")
