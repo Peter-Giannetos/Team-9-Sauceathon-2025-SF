@@ -21,7 +21,7 @@
 
 
 //===================================================================================================
-// Variables
+// Initialization Variables
 
 bool ready = false;
 
@@ -43,6 +43,18 @@ typedef struct struct_message {
 
 struct_message incomingData;
 struct_message outgoingData; 
+char outgoingMsg[32] = "Hello ESP-NOW";  // Default message - Modify with new messages
+
+/**
+ * @brief WIFI MESSAGE PROTOCOL
+ * 
+ * 1. Edit outgoingMsg with new char
+ * 2. Send wifi
+ * 3. Keep reboradcasting message until ready for next state (Incase packet was not received)
+ * 4. Read message and react once until message from device changes
+ * 
+ */
+
 
 // Task handles
 TaskHandle_t TaskWiFiHandle = NULL;
@@ -77,13 +89,34 @@ void printTask(void* parameter) {
   }
 }
 
-// FUNCTION: ESP-NOW receive callback
+// FUNCTION: ESP-NOW Read Message
 void OnDataRecv(const uint8_t* mac, const uint8_t* incomingDataPtr, int len) {
+
+  // 1. Fetch message
   memcpy(&incomingData, incomingDataPtr, sizeof(incomingData));
   enqueuePrint("Received data: %s\n", incomingData.msg);
+
+  // 2. Fetch device MAC
+  char macStr[18];
+    snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X", 
+        mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    enqueuePrint("Received from MAC: %s\n", macStr);
+    memcpy(&incomingData, incomingDataPtr, sizeof(incomingData));
+    enqueuePrint("Received data: %s\n", incomingData.msg);
+
+  // 3. Process message
+  if (strcmp(incomingData.msg, "CHANGE_ME") == 0) {
+    // Function Call 1
+  }
+  else if (strcmp(incomingData.msg, "CHANGE_ME") == 0) {
+    // Function Call 2
+  }
+  else if (strcmp(incomingData.msg, "CHANGE_ME") == 0) {
+    // Function Call 3
+  }
 }
 
-// FUNCTION: ESP-NOW send callback
+// FUNCTION: ESP-NOW Send Message
 void OnDataSent(const uint8_t* mac_addr, esp_now_send_status_t status) {
   enqueuePrint("Last Packet Send Status: %s\n",
                status == ESP_NOW_SEND_SUCCESS ? "Success" : "Fail");
@@ -105,8 +138,8 @@ void wifiTask(void* parameter) {
   esp_now_register_send_cb(OnDataSent);
 
   // Add broadcast peer
-  esp_now_peer_info_t peerInfo = {};
-  uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
+  esp_now_peer_info_t peerInfo = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};  // Listen to everyone
+  uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};    // Broadcast to everyone
   memcpy(peerInfo.peer_addr, broadcastAddress, 6);
   peerInfo.channel = 0;
   peerInfo.encrypt = false;
@@ -118,7 +151,7 @@ void wifiTask(void* parameter) {
   }
 
   while (1) {
-    strcpy(outgoingData.msg, "Hello ESP-NOW");
+    strcpy(outgoingData.msg, outgoingMsg);
     outgoingData.value = millis() / 1000;
 
     esp_err_t result = esp_now_send(broadcastAddress, (uint8_t*)&outgoingData, sizeof(outgoingData));
@@ -128,7 +161,7 @@ void wifiTask(void* parameter) {
     } else {
       enqueuePrint("Error sending the data\n");
     }
-    vTaskDelay(5000 / portTICK_PERIOD_MS);
+    vTaskDelay(500 / portTICK_PERIOD_MS);    // Sleep 500 mS
   }
 }
 
@@ -221,7 +254,7 @@ void loop() {
 
   // 4. Parse serial input
   if (Serial.available()) {
-
+    
     // 4.1 Read serial
     String cmd = Serial.readStringUntil('\n');
     cmd.trim();
@@ -234,9 +267,15 @@ void loop() {
       enqueuePrint("PWM duty cycle set to %d%%\n", userValue);
     }
     
-    // 4.3 Unknown command error
+    // 4.3 Update ESP-NOW message if not a PWM number //TODO COPY THIS FORMAT TO SEND MESSAGES
+    else if (cmd.length() < sizeof(outgoingMsg)) {
+      cmd.toCharArray(outgoingMsg, sizeof(outgoingMsg));
+      enqueuePrint("Updated message to send: %s\n", outgoingMsg);
+    }
+    
+    // 4.4 Unknown command error
     else {
-      enqueuePrint("Unknown command. Use a number (0–100).\n");
+      enqueuePrint("Unknown command or message too long. Use PWM (0–100) or shorter text message.\n");
     }
   }
 
