@@ -25,6 +25,59 @@
 #define SERIAL_DEBUG                        // Define to enable serial debugging
 
 
+
+
+//===================================================================================================
+// Hardware Interrupt
+
+#define INTERRUPT_PIN (27)
+volatile bool interruptTriggered = false;
+volatile unsigned long lastInterruptTime = 0;
+const unsigned long interruptDebounce = 100; // 100 ms minimum gap between interrupts
+
+// ISR function
+void IRAM_ATTR handleInterrupt() {
+  unsigned long currentTime = millis();
+
+  // Ignore interrupt if triggered too soon after the last one
+  if ((currentTime - lastInterruptTime) < interruptDebounce) {
+    return;
+  }
+
+  lastInterruptTime = currentTime;
+  interruptTriggered = true;
+}
+
+
+//===================================================================================================
+// Finite State Machine
+
+enum state {
+    STATE_B_DETECT_BUTTON,  // 1. Go to STATE_B_DROP 
+    STATE_B_DROP,           // 1. Reset gate (butter/toast), Reset flipper (Open Top) | 2. Open bottom dropper | 3. Wait
+    STATE_B_BUTTER,         // 1. Apply butter | 2. Open gate butter | 3. Wait
+    STATE_B_TOAST,          // 1. Measure sound & heat | 2. Brand | 3. open gate toast | 4. Wait
+    STATE_B_DISPENSE,       // 1. Dispense pusher | 2. Wait
+    STATE_T_DETECT_BUTTON,  // 1. Go to STATE_T_DROP 
+    STATE_T_DROP,           // 1. Reset gate (butter/toast), Reset flipper (Close Top) | 2. Open top dropper | 3. Wait
+    STATE_T_BUTTER,         // 1. Apply butter | 2. Open gate butter | 3. Wait
+    STATE_T_TOAST,          // 1. Measure sound & heat | 2. Brand | 3. open gate toast | 4. Wait
+    STATE_T_DISPENSE,       // 1. Dispense flipper | 2. Wait
+};
+
+state fsm = STATE_B_DETECT_BUTTON;
+
+#define DELAY_B_DROP_WAIT            500   // STATE_B_DROP: Wait after opening bottom dropper
+#define DELAY_B_BUTTER_WAIT          400   // STATE_B_BUTTER: Wait after opening butter gate
+#define DELAY_B_TOAST_WAIT           700   // STATE_B_TOAST: Wait after opening toast gate
+#define DELAY_B_DISPENSE_WAIT        300   // STATE_B_DISPENSE: Wait after dispensing pusher
+
+#define DELAY_T_DROP_WAIT            500   // STATE_T_DROP: Wait after opening top dropper
+#define DELAY_T_BUTTER_WAIT          400   // STATE_T_BUTTER: Wait after opening butter gate
+#define DELAY_T_TOAST_WAIT           700   // STATE_T_TOAST: Wait after opening toast gate
+#define DELAY_T_DISPENSE_WAIT        300   // STATE_T_DISPENSE: Wait after dispensing flipper
+
+
 //===================================================================================================
 // Initialization Variables
 
@@ -231,6 +284,12 @@ void setup() {
   pinMode(LED_PIN, OUTPUT);
   pinMode(SOUND_PIN, INPUT);
 
+  // 1.1 Attach hardware interrupt
+  pinMode(INTERRUPT_PIN, INPUT_PULLUP);  // Expecting a LOW signal to trigger
+  attachInterrupt(digitalPinToInterrupt(INTERRUPT_PIN), handleInterrupt, FALLING);
+
+
+
   // 2. Pin setup PWM
   ledcSetup(PWM_DEFAULT_CHANNEL, PWM_DEFAULT_FREQ, PWM_DEFAULT_RESOLUTION);
   ledcAttachPin(PWM_PIN, PWM_DEFAULT_CHANNEL);
@@ -392,7 +451,15 @@ void loop() {
     }
   }
 
-  // 5. Parse serial input
+  // 5. Service interrupt
+    if (interruptTriggered) {
+    interruptTriggered = false;
+    enqueuePrint("Interrupt triggered at %lu ms\n", millis());
+    // Add your interrupt-handling logic here
+    
+  }
+
+  // 6. Parse serial input
   if (Serial.available()) {
     
     // 4.1 Read serial
