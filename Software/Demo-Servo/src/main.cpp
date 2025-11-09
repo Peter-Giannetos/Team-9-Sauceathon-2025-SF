@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include "slave_config.h"
+#include "servo_util.h"
 
 // -----------------------------
 // Utils
@@ -25,46 +26,25 @@
 #endif
 
 // -----------------------------
+// Include Motor Headers
+// -----------------------------
+#if DS_MOTOR
+#include "ds_motor.h"
+#endif
+#if DS_CONTINUOUS_MOTOR
+#include "ds_continuous_motor.h"
+#endif
+#if PARALLAX_MOTOR
+#include "parallax_motor.h"
+#endif
+#if TOWER_PRO_MOTOR
+#include "tower_pro_motor.h"
+#endif
+
+// -----------------------------
 // Feature flags
 // -----------------------------
 #define DEBUG                 (0U)
-
-// -----------------------------
-// Pins
-// -----------------------------
-constexpr uint8_t LED_PIN  = 2;
-constexpr uint8_t OUT1_PIN = 13;   // Primary servo output
-constexpr uint8_t OUT2_PIN = 14;   // Secondary (DS dual-servo use)
-
-// -----------------------------
-// Servo timing constants
-// -----------------------------
-constexpr uint16_t SERVO_FRAME_MS   = 20;    // Typical RC servo frame
-constexpr uint16_t SERVO_NEUTRAL_US = 1500;  // Neutral for continuous
-constexpr uint16_t SERVO_MIN_US     = 500;   // Positional min pulse
-constexpr uint16_t SERVO_MAX_US     = 2500;  // Positional max pulse
-
-// -----------------------------
-// DS positional presets (per pin)
-// -----------------------------
-#if DS_MOTOR
-constexpr uint8_t TOP_BUN_CLOSED     = 170;  // OUT1_PIN
-constexpr uint8_t TOP_BUN_OPEN       = 80;   // OUT1_PIN
-constexpr uint8_t BOTTOM_BUN_CLOSED  = 90;   // OUT2_PIN
-constexpr uint8_t BOTTOM_BUN_OPEN    = 0;    // OUT2_PIN
-constexpr uint16_t DS_BOUNCE_MOVE_MS = 500;  // time to hold each target
-#endif
-
-// -----------------------------
-// TowerPro MG995 (Servo lib)
-// -----------------------------
-#if TOWER_PRO_MOTOR
-#include <Servo.h>
-Servo MG995_Servo;
-constexpr uint8_t TOWER_PRO_FORWARD   = 0;
-constexpr uint8_t TOWER_PRO_BACKWARD  = 180;
-constexpr uint8_t TOWER_PRO_HALT      = 90;
-#endif
 
 // -----------------------------
 // Serial helpers
@@ -113,87 +93,6 @@ static void tokenize3(const String& s, String& t0, String& t1, String& t2) {
 }
 
 // -----------------------------
-// Generic single-frame pulse (manual PWM)
-// -----------------------------
-static inline void servoOneFrameWriteUs(uint8_t pin, uint16_t highUs) {
-  if (highUs < 400)  highUs = 400;
-  if (highUs > 2700) highUs = 2700;
-  delay(SERVO_FRAME_MS);
-  digitalWrite(pin, HIGH);
-  delayMicroseconds(highUs);
-  digitalWrite(pin, LOW);
-}
-
-// -----------------------------
-// DS positional (manual pulse)
-// -----------------------------
-#if DS_MOTOR
-static inline uint16_t angleToUs(uint8_t deg) {
-  return static_cast<uint16_t>(SERVO_MIN_US + ((static_cast<uint32_t>(deg) * 2000U) / 180U));
-}
-
-static void driveDsServoAngle(uint8_t pin, int angleDeg) {
-  angleDeg = constrain(angleDeg, 0, 180);
-  uint16_t us = angleToUs(static_cast<uint8_t>(angleDeg));
-  if (DEBUG) { enqueuePrint("DS angle="); enqueuePrint(angleDeg); enqueuePrint(" us="); enqueuePrint("%d\n", us); }
-  servoOneFrameWriteUs(pin, us);
-}
-
-// Hold a position for holdMs by refreshing every frame
-static void dsHoldAngle(uint8_t pin, int angleDeg, uint16_t holdMs) {
-  uint32_t start = millis();
-  while (millis() - start < holdMs) {
-    driveDsServoAngle(pin, angleDeg);
-  }
-}
-
-static inline uint8_t dsClosedAngleForPin(uint8_t pin) {
-  return (pin == OUT2_PIN) ? BOTTOM_BUN_CLOSED : TOP_BUN_CLOSED;
-}
-static inline uint8_t dsOpenAngleForPin(uint8_t pin) {
-  return (pin == OUT2_PIN) ? BOTTOM_BUN_OPEN : TOP_BUN_OPEN;
-}
-
-// CLOSED->OPEN, pause, OPEN->CLOSED
-static void dsBounce(uint8_t pin, uint16_t pauseMs) {
-  uint8_t openA   = dsOpenAngleForPin(pin);
-  uint8_t closedA = dsClosedAngleForPin(pin);
-  dsHoldAngle(pin, openA,   DS_BOUNCE_MOVE_MS);
-  delay(pauseMs);
-  dsHoldAngle(pin, closedA, DS_BOUNCE_MOVE_MS);
-}
-#endif
-
-// -----------------------------
-// Continuous (manual pulse)
-// -----------------------------
-#if DS_CONTINUOUS_MOTOR || PARALLAX_MOTOR
-static void contServoHalt(uint8_t pin)  { servoOneFrameWriteUs(pin, SERVO_NEUTRAL_US); }
-static void contServoRight(uint8_t pin) { servoOneFrameWriteUs(pin, 1300); }
-static void contServoLeft(uint8_t pin)  { servoOneFrameWriteUs(pin, 1700); }
-static void contServoBounce(uint8_t pin, int cycles) {
-  if (cycles < 0) cycles = 0;
-  for (int i = 0; i < cycles; ++i) contServoRight(pin);
-  for (int i = 0; i < cycles; ++i) contServoLeft(pin);
-}
-#endif
-
-// -----------------------------
-// TowerPro MG995 (Servo lib)
-// -----------------------------
-#if TOWER_PRO_MOTOR
-static void towerProClockwise()    { MG995_Servo.write(TOWER_PRO_FORWARD); }
-static void towerProCounterwise()  { MG995_Servo.write(TOWER_PRO_BACKWARD); }
-static void towerProHalt()         { MG995_Servo.write(TOWER_PRO_HALT); }
-static void towerProBounce(uint16_t durationMs, uint16_t pauseMs) {
-  towerProClockwise();  delay(durationMs);
-  towerProHalt();       delay(pauseMs);
-  towerProCounterwise();delay(durationMs);
-  towerProHalt();
-}
-#endif
-
-// -----------------------------
 // Arduino setup/loop
 // -----------------------------
 void setup() {
@@ -206,7 +105,7 @@ void setup() {
   blinkAtBoot(LED_PIN);
 
 #if TOWER_PRO_MOTOR
-  MG995_Servo.attach(OUT1_PIN);
+  towerProInit();
 #endif
 
   // side effect: spin up Wifi task (and Print task if DEBUG flag set)
@@ -301,7 +200,7 @@ void loop() {
     }
   }
 
-#elif DS_CONTINUOUS_MOTOR || PARALLAX_MOTOR
+#elif DS_CONTINUOUS_MOTOR
   enqueuePrint("CR: enter 'r' (right), 'l' (left), 's' (stop), or a number for bounce cycles:\n");
   while (true) {
     if (dir < 0)      contServoLeft(OUT1_PIN);
@@ -327,6 +226,34 @@ void loop() {
       break;
     }
   }
-#endif
+#endif // DS_MOTOR
+
+#if PARALLAX_MOTOR
+  enqueuePrint("CR: enter 'r' (right), 'l' (left), 's' (stop), or a number for bounce cycles:\n");
+  while (true) {
+    if (dir < 0)      parallaxServoLeft(OUT1_PIN);
+    else if (dir > 0) parallaxServoRight(OUT1_PIN);
+    else if (bounceFlag) {
+      parallaxServoBounce(OUT1_PIN, num);
+      dir = 0; bounceFlag = false;
+    } else           parallaxServoHalt(OUT1_PIN);
+
+    if (Serial.available()) {
+      String input = Serial.readStringUntil('\n'); input.trim();
+      if (input.length() == 0) break;
+
+      char mode = input.charAt(0);
+      switch (mode) {
+        case 'r': enqueuePrint("Right\n"); dir = 1;  bounceFlag = false; break;
+        case 'l': enqueuePrint("Left\n");  dir = -1; bounceFlag = false; break;
+        case 's': enqueuePrint("Stop\n");  dir = 0;  bounceFlag = false; break;
+        default:
+          if (isDigit(mode)) { num = MAX(0, (int)(input.toInt())); bounceFlag = true; }
+          break;
+      }
+      break;
+    }
+  }
+#endif // PARALLAX_MOTOR
   // TODO: add vTaskDelay()
 }
